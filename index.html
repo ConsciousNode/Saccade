@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SACCADE — Browser-Native OCR</title>
+<style>
+  :root {
+    --void: #04060c;
+    --deep: #080c18;
+    --surface: #0d1220;
+    --amber: #e8a040;
+    --amber-dim: rgba(232,160,64,0.3);
+    --green: #40c878;
+    --text: #c8d4e8;
+    --text-lo: #5a6a88;
+    --mono: 'Courier New', Courier, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--void);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    gap: 48px;
+  }
+  .wordmark {
+    letter-spacing: .35em;
+    font-size: clamp(28px, 6vw, 52px);
+    color: var(--amber);
+    text-transform: uppercase;
+  }
+  .tagline {
+    font-size: 11px;
+    letter-spacing: .18em;
+    color: var(--text-lo);
+    text-transform: uppercase;
+    text-align: center;
+    line-height: 2;
+  }
+  .tagline em {
+    color: var(--text);
+    font-style: normal;
+  }
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    font-size: 9px;
+    letter-spacing: .15em;
+    color: var(--text-lo);
+  }
+  .pipeline .stage { color: var(--green); }
+  .pipeline .sep { opacity: .3; }
+  .cta {
+    display: inline-block;
+    padding: 14px 36px;
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .25em;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: background .2s, color .2s;
+  }
+  .cta:hover {
+    background: var(--amber);
+    color: var(--void);
+  }
+  .desc {
+    max-width: 520px;
+    font-size: 11px;
+    line-height: 2;
+    color: var(--text-lo);
+    text-align: center;
+  }
+  .desc em { color: var(--text); font-style: normal; }
+  .facts {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .fact {
+    font-size: 9px;
+    letter-spacing: .15em;
+    color: var(--text-lo);
+    text-align: center;
+    line-height: 1.8;
+  }
+  .fact strong { display: block; color: var(--amber); font-size: 11px; }
+  .footer {
+    font-size: 9px;
+    letter-spacing: .12em;
+    color: var(--text-lo);
+    text-align: center;
+    line-height: 2;
+  }
+  .footer a { color: var(--text-lo); }
+  .divider {
+    width: 48px;
+    height: 1px;
+    background: var(--amber-dim);
+  }
+</style>
+</head>
+<body>
+
+<div class="wordmark">SACCADE</div>
+
+<div class="tagline">
+  <em>Browser-native image text extraction</em><br>
+  Zero external dependencies · Xinu compliant · Offline first
+</div>
+
+<div class="pipeline">
+  <span class="stage">INGEST</span><span class="sep">›</span>
+  <span class="stage">THRESH</span><span class="sep">›</span>
+  <span class="stage">SEGMENT</span><span class="sep">›</span>
+  <span class="stage">CLUSTER</span><span class="sep">›</span>
+  <span class="stage">LABEL</span><span class="sep">›</span>
+  <span class="stage">WARM UP</span><span class="sep">›</span>
+  <span class="stage">QUANTIZE</span><span class="sep">›</span>
+  <span class="stage">MATCH</span><span class="sep">›</span>
+  <span class="stage">EMIT</span>
+</div>
+
+<a class="cta" href="Saccade.html">OPEN SACCADE</a>
+
+<div class="divider"></div>
+
+<div class="desc">
+  Drop an image. Label character clusters. A tiny neural net warms up in your browser —
+  <em>no server, no cloud, no API</em>. The net quantizes to ternary weights via TMAC lookup tables
+  for 4× faster inference at 48×48 resolution. Your labeled samples persist in a
+  <em>.sacat atlas file</em> that grows smarter with every session.
+</div>
+
+<div class="facts">
+  <div class="fact"><strong>SINGLE FILE</strong>no build step<br>copy anywhere</div>
+  <div class="fact"><strong>TMAC INFERENCE</strong>BitNet b1.58 ternary<br>lookup tables</div>
+  <div class="fact"><strong>.SACAT LIBRARY</strong>persistent atlas<br>font-fingerprinted</div>
+  <div class="fact"><strong>ANY BROWSER</strong>Chrome · Firefox<br>Safari · Mobile</div>
+</div>
+
+<div class="divider"></div>
+
+<div class="footer">
+  During a saccade, the eye is blind.<br>
+  Saccade only sees what it lands on.<br><br>
+  <a href="https://github.com/ConsciousNode/Saccade">github.com/ConsciousNode/Saccade</a><br>
+  ConsciousNode SoftWorks · Greenwood, South Carolina
+</div>
+
+</body>
+</html>
