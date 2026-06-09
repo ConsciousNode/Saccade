@@ -31,6 +31,7 @@
       background: var(--void);
       color: var(--text);
       height: 100vh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -90,11 +91,13 @@
       flex: 1;
       display: flex;
       overflow: hidden;
+      min-height: 0;
     }
 
     /* ── LEFT PANEL ── */
     .panel-left {
       width: 52%;
+      min-width: 0;
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -113,6 +116,17 @@
       flex-shrink: 0;
     }
     .mode-tag { color: var(--steel); }
+
+    /* ── MOBILE: stack panels vertically ── */
+    @media (max-width: 600px) {
+      body { font-size: 11px; }
+      main { flex-direction: column; }
+      .panel-left { width: 100%; height: 40vh; min-height: 0; border-right: none; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+      .panel-right { flex: 1; min-height: 0; }
+      header { padding: 7px 12px; gap: 10px; }
+      .title { font-size: 15px; }
+      .subtitle { display: none; }
+    }
 
     /* ── DROP ZONE ── */
     #drop-zone {
@@ -256,6 +270,13 @@
       gap: 0;
       flex-shrink: 0;
       overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .pipeline::-webkit-scrollbar { display: none; }
+    @media (max-width: 600px) {
+      .pipeline { padding: 4px 8px; }
+      .stage { font-size: 7px; padding: 3px 4px; }
+      .ssep { padding: 0; }
     }
     .stage {
       display: flex;
@@ -313,6 +334,7 @@
       border-top: 1px solid var(--border);
       background: var(--deep);
       display: flex;
+      flex-wrap: wrap;
       gap: 7px;
       align-items: center;
       flex-shrink: 0;
@@ -344,11 +366,12 @@
       border-bottom: 1px solid var(--border);
       background: var(--deep);
       display: flex;
-      gap: 7px;
+      flex-wrap: wrap;
+      gap: 5px;
       align-items: center;
       flex-shrink: 0;
     }
-    .lib-count { font-size: 9px; color: var(--green); letter-spacing: .12em; margin-right: auto; }
+    .lib-count { font-size: 9px; color: var(--green); letter-spacing: .12em; flex: 1; min-width: 100px; }
 
     /* ── LABEL MODAL ── */
     #label-modal {
@@ -1252,6 +1275,7 @@
       <span class="lib-count" id="lib-count">📚 Library: 0 chars</span>
       <button id="btn-lib-import">IMPORT .SACAT</button>
       <button id="btn-lib-export">EXPORT .SACAT</button>
+      <button id="btn-lib-clear" style="color:var(--red);border-color:var(--red);">CLEAR LIB</button>
     </div>
     <!-- Label modal (overlays right panel) -->
     <div id="label-modal">
@@ -1285,7 +1309,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.29 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -1915,11 +1939,13 @@ function groupLines(segs,lineGap){
   return lines;
 }
 
-function lineToString(line,bin,W,net,medW){
+function lineToString(line,bin,W,net,medW,blobLabels){
   let out='';
   for(let i=0;i<line.length;i++){
     if(i>0&&(line[i].minX-line[i-1].maxX)>medW*0.45) out+=' ';
-    out+=matchBlob(line[i],bin,W,net);
+    // Use direct label if this blob's cluster was labeled by the user
+    const direct=blobLabels&&blobLabels.get(line[i]._origIdx);
+    out+=direct!==undefined?direct:matchBlob(line[i],bin,W,net);
   }
   return out;
 }
@@ -2012,6 +2038,19 @@ document.getElementById('btn-lib-import').addEventListener('click',()=>{
     }catch(e){alert('Failed to import: '+e.message);}
   };
   inp.click();
+});
+
+// Clear library
+document.getElementById('btn-lib-clear').addEventListener('click',()=>{
+  if(sacatLib.size===0){alert('Library is already empty.');return;}
+  const n=libCount();
+  if(!confirm(`Clear entire library? This will remove ${sacatLib.size} chars and ${n} samples from memory and localStorage.\n\nExport a .sacat first if you want to keep them.`)) return;
+  sacatLib.clear();
+  localStorage.removeItem(SACAT_LS_KEY);
+  _trainedNet=null; // invalidate cached net — library changed
+  _trainedAtH=0;
+  updateLibUI();
+  alert('Library cleared.');
 });
 
 // Load library on startup
@@ -2179,23 +2218,34 @@ async function runLabelUI(clusters,medH){
   const input=document.getElementById('label-input');
   const labeled=new Map(); // clusterIdx → char
 
-  // Filter clusters: skip those already auto-matched
+  // Auto-match what we can, but always show at least MIN_CONFIRM_FLOOR
+  // clusters so stale library doesn't silently consume everything
+  const autoMatched=[];
   const toLabel=[];
   for(let i=0;i<clusters.length;i++){
     const auto=autoMatchCluster(clusters[i].centroid,medH);
-    if(auto){
-      labeled.set(i,auto);
-    } else {
-      toLabel.push(i);
-    }
+    if(auto){ autoMatched.push({i,auto}); }
+    else     { toLabel.push(i); }
   }
+
+  // Promote some auto-matched clusters back to toLabel for user confirmation
+  // so a stale library can be caught and corrected
+  const MIN_CONFIRM_FLOOR=5;
+  if(toLabel.length<MIN_CONFIRM_FLOOR){
+    const need=MIN_CONFIRM_FLOOR-toLabel.length;
+    const promoted=autoMatched.splice(0,Math.min(need,autoMatched.length));
+    for(const{i} of promoted) toLabel.push(i);
+  }
+
+  // Commit the remaining auto-matches that weren't promoted
+  for(const{i,auto} of autoMatched) labeled.set(i,auto);
 
   if(toLabel.length===0){modal.classList.remove('on');return labeled;}
 
   modal.classList.add('on');
   input.value=''; input.focus();
 
-  const MIN_LABELS=20;
+  const MIN_LABELS=Math.min(10,toLabel.length); // adaptive — never demand more than we have
   const btnDone=document.getElementById('btn-label-done');
 
   return new Promise(resolve=>{
@@ -2215,7 +2265,12 @@ async function runLabelUI(clusters,medH){
     }
 
     function showCluster(){
-      if(idx>=toLabel.length){finish();return;}
+      if(idx>=toLabel.length){
+        // Exhausted all clusters — resolve regardless of confirmed count
+        // so we never hang the pipeline
+        finish(true);
+        return;
+      }
       const ci=toLabel[idx];
       const cl=clusters[ci];
       progress.textContent=`cluster ${idx+1} of ${toLabel.length} · ${cl.members.length} blobs`;
@@ -2237,8 +2292,9 @@ async function runLabelUI(clusters,medH){
 
     function skip(){idx++;showCluster();}
 
-    function finish(){
-      if(confirmed<MIN_LABELS&&idx<toLabel.length) return; // guard
+    function finish(forced=false){
+      // Allow early exit only if minimum met OR forced (clusters exhausted)
+      if(!forced&&confirmed<MIN_LABELS&&idx<toLabel.length) return;
       btnDone.disabled=false;
       btnDone.textContent='DONE LABELING';
       btnDone.style.opacity='1';
@@ -2248,7 +2304,7 @@ async function runLabelUI(clusters,medH){
 
     document.getElementById('btn-label-confirm').onclick=confirm;
     document.getElementById('btn-label-skip').onclick=skip;
-    document.getElementById('btn-label-done').onclick=finish;
+    document.getElementById('btn-label-done').onclick=()=>finish(false);
     input.onkeydown=e=>{if(e.key==='Enter')confirm();if(e.key==='Escape')skip();};
 
     showCluster();
@@ -2256,10 +2312,13 @@ async function runLabelUI(clusters,medH){
 }
 
 // ── Update warmUp to use library entries ─────────────────────────
-// Library entries are weighted 3× over synthetic — real beats synth.
-// Modify warmUp to accept optional labeledSamples argument.
+// Library entries are weighted 2× over synthetic — real beats synth.
+// Cache is invalidated if medH drifts >20% OR library size has changed.
+let _trainedLibCount=0; // library size when net was last trained
 async function warmUpWithLib(medH,labeledSamples,onProgress){
-  if(_trainedNet&&Math.abs(_trainedAtH-medH)/_trainedAtH<0.20&&labeledSamples.size===0){
+  const curLibCount=libCount();
+  if(_trainedNet&&Math.abs(_trainedAtH-medH)/_trainedAtH<0.20
+     &&labeledSamples.size===0&&curLibCount===_trainedLibCount){
     onProgress(1.0,'reusing cached network'); return _trainedNet;
   }
 
@@ -2289,11 +2348,6 @@ async function warmUpWithLib(medH,labeledSamples,onProgress){
       for(let w=0;w<LIB_WEIGHT;w++){Xs.push(s.pixels);Ys.push(ci);}
       used++;
     }
-  }
-  // Also add freshly labeled clusters (may not be in lib yet — they are, but belt+suspenders)
-  for(const[,ch] of labeledSamples){
-    const ci=CHARS.indexOf(ch);
-    if(ci<0) continue;
   }
 
   // 2. Synthetic coverage
@@ -2331,7 +2385,7 @@ async function warmUpWithLib(medH,labeledSamples,onProgress){
   }
 
   onProgress(1.0,'training complete');
-  _trainedNet=net; _trainedAtH=medH;
+  _trainedNet=net; _trainedAtH=medH; _trainedLibCount=libCount();
   return net;
 }
 
@@ -2384,6 +2438,8 @@ async function jsPipelinePath(bin,W,H){
     }
   }
   const filteredComps=comps.filter((_,i)=>!merged.has(i));
+  // Tag each comp with its original index so MATCH can look up cluster labels
+  filteredComps.forEach((c,i)=>{ c._origIdx=i; });
   setStage('seg','done');
 
   const heights=filteredComps.map(c=>c.maxY-c.minY+1);
@@ -2424,9 +2480,16 @@ async function jsPipelinePath(bin,W,H){
   setStage('quant','done');
 
   // MATCH — TMAC ternary forward pass per blob
+  // labeledMap: clusterIdx → char; clusters[i].members: [compIdx...]
+  // Build blobLabels: origCompIdx → char for direct short-circuit
   setStage('match','active'); await tick();
+  const blobLabels=new Map();
+  for(const[clusterIdx,ch] of labeledMap){
+    const cl=clusters[clusterIdx];
+    if(cl) for(const compIdx of cl.members) blobLabels.set(compIdx,ch);
+  }
   const lines=groupLines(filteredComps,medH*0.55);
-  const text=lines.map(l=>lineToString(l,bin,W,qnet,medW)).join('\n');
+  const text=lines.map(l=>lineToString(l,bin,W,qnet,medW,blobLabels)).join('\n');
   setStage('match','done');
 
   // EMIT

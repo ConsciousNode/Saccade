@@ -22,17 +22,17 @@ INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → LABEL → WARM UP → QU
 
 **CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. Hull fill ratio filtering removes bracket fragments and corner noise before clustering. Up to 40 clusters per image, sorted by population.
 
-**LABEL** shows each cluster at native blob resolution — six example blobs, rendered crisp. You type the character. Minimum 20 labels required before DONE LABELING unlocks, counting down live.
+**LABEL** shows each cluster at native blob resolution — six example blobs, rendered crisp. You type the character. At least 5 clusters always shown even if the library auto-matches everything, so stale library state can't silently eat the session. Minimum label count adapts to how many clusters are actually present.
 
-**WARM UP** trains a two-layer neural net (`2304→64→95`) on labeled samples plus synthetic augmentation. Cross-entropy loss, cosine LR decay, 45 epochs. Progress shown live in the pipeline strip.
+**WARM UP** trains a two-layer neural net (`2304→64→95`) on labeled samples plus synthetic augmentation. Cross-entropy loss, cosine LR decay, 45 epochs. Progress shown live in the pipeline strip. Cached net invalidates if the library has changed size since last training.
 
 **QUANTIZE** converts trained float32 L1 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk). Inference at 48×48 costs the same as float32 at 32×32.
 
-**MATCH** runs each blob through the quantized net. Blobs where the margin between top-1 and top-2 probability is below 0.08 are skipped — uncertainty is honest silence, not wrong output.
+**MATCH** runs each blob through the quantized net. Blobs whose cluster was directly labeled during this session short-circuit inference entirely — the label is used verbatim. All other blobs go through the net; those where the margin between top-1 and top-2 probability is below 0.08 are skipped (uncertainty is honest silence, not wrong output).
 
 ## The library
 
-Every session builds your `.sacat` atlas file — a JSON archive of labeled blob samples, font-fingerprinted to prevent cross-font contamination. Export it, import it anywhere. The library auto-matches previously labeled clusters so the LABEL stage gets shorter with every run.
+Every session builds your `.sacat` atlas file — a JSON archive of labeled blob samples, font-fingerprinted to prevent cross-font contamination. Export it, import it anywhere. The library auto-matches previously labeled clusters so the LABEL stage gets shorter with every run. A **CLEAR LIB** button is available if the library gets contaminated or you want a fresh start.
 
 ```
 📚 Library: 30 chars · 579 samples
@@ -42,7 +42,7 @@ Every session builds your `.sacat` atlas file — a JSON archive of labeled blob
 
 1. Open `Saccade.html` in any modern browser
 2. Drop or select an image
-3. Label at least 20 character clusters
+3. Label character clusters (at least a few — the rest auto-match from your library)
 4. Wait for WARM UP and QUANTIZE (~90 seconds on mobile)
 5. Copy the extracted text
 6. Export your `.sacat` library to keep labels for next time
@@ -53,6 +53,7 @@ Every session builds your `.sacat` atlas file — a JSON archive of labeled blob
 - **Xinu compliant.** Browser as bare metal. The only runtime is what ships with the browser.
 - **Offline first.** Nothing leaves your device.
 - **Browser agnostic.** Any modern engine. Tested on Android Chrome.
+- **Responsive.** Works on mobile and desktop without reformatting.
 
 ## Technical lineage
 
@@ -68,7 +69,16 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v28 (current)
+### v29 (current)
+- **Label modal hang fixed** — stale localStorage library no longer silently auto-matches all clusters; `MIN_CONFIRM_FLOOR=5` always promotes at least 5 clusters to manual review
+- **Pipeline freeze fixed** — `finish()` now resolves the Promise when clusters are exhausted even if minimum label count wasn't reached; `MIN_LABELS` adapts to cluster count
+- **Labeling actually affects output** — labeled clusters now short-circuit neural net inference at MATCH time; blobs whose cluster was labeled get that char directly, no margin check, no uncertainty
+- **CLEAR LIB button** — red button in lib bar; confirms before wiping; clears `sacatLib`, `localStorage`, and invalidates net cache
+- **Net cache invalidation fixed** — `_trainedLibCount` tracks library size at training time; cache busts if library changed between runs
+- **Dead loop removed** — stub `for(const[,ch] of labeledSamples)` with empty body removed from `warmUpWithLib`
+- **Responsive layout** — `100dvh` for mobile address-bar correctness; panels stack vertically on ≤600px screens; lib-bar and output-bar wrap on narrow viewports; pipeline bar scrolls silently
+
+### v28
 - Fixed `.sacat` import: `fontFP` now preserved through export/import round-trip; imported entries no longer silently dropped at training time
 - Confidence margin lowered 0.15→0.08 for better recall at 48×48 input resolution
 - Epochs bumped 35→45 for better convergence
