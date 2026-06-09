@@ -373,20 +373,22 @@
     }
     .lib-count { font-size: 9px; color: var(--green); letter-spacing: .12em; flex: 1; min-width: 100px; }
 
-    /* ── LABEL MODAL ── */
-    #label-modal {
+    /* ── LABEL MODAL + GAPFILL MODAL ── */
+    #label-modal, #gapfill-modal {
       display: none;
       position: absolute;
       inset: 0;
-      background: rgba(4,6,12,.92);
+      background: rgba(4,6,12,.96);
       z-index: 20;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 16px;
+      gap: 14px;
       padding: 20px;
+      overflow-y: auto;
     }
     #label-modal.on { display: flex; }
+    #gapfill-modal.on { display: flex; }
     .label-header {
       font-size: 9px;
       letter-spacing: .2em;
@@ -1279,17 +1281,38 @@
     </div>
     <!-- Label modal (overlays right panel) -->
     <div id="label-modal">
-      <div class="label-header">LABEL CLUSTERS — BUILD YOUR ATLAS</div>
+      <div class="label-header" id="label-header">LABEL CLUSTERS — BUILD YOUR ATLAS</div>
       <div class="label-progress" id="label-progress">cluster 1 of 20</div>
       <div class="cluster-grid" id="cluster-grid"></div>
-      <div class="label-hint">What character do these blobs show?</div>
+      <div class="label-hint" id="label-hint">What character do these blobs show?</div>
       <div class="label-input-row">
         <input id="label-input" maxlength="1" autocomplete="off" spellcheck="false" placeholder="?">
+        <span id="label-suggestion" style="display:none;font-size:8px;color:var(--amber-dim);letter-spacing:.1em;">← suggested</span>
       </div>
       <div class="label-actions">
         <button id="btn-label-confirm" class="hi">CONFIRM</button>
         <button id="btn-label-skip">SKIP</button>
-        <button id="btn-label-done">DONE LABELING</button>
+        <button id="btn-label-done" class="hi">DONE LABELING</button>
+      </div>
+    </div>
+    <!-- Gap-fill modal (overlays right panel) -->
+    <div id="gapfill-modal">
+      <div class="label-header">GAP FILL — CHARS WITH NO REAL SAMPLES</div>
+      <div class="label-progress" id="gapfill-progress">char 1 of N</div>
+      <div style="font-size:8px;color:var(--text-lo);letter-spacing:.1em;text-align:center;max-width:280px;">
+        This character has no real samples in your library.<br>
+        Find it in the image and confirm, or skip if it's not there.
+      </div>
+      <div class="cluster-grid" id="gapfill-grid"></div>
+      <div class="label-hint" id="gapfill-hint">Reference render — find this in your image</div>
+      <div class="label-input-row">
+        <input id="gapfill-input" maxlength="1" autocomplete="off" spellcheck="false" placeholder="?">
+        <span style="font-size:8px;color:var(--text-lo);letter-spacing:.1em;">← confirm char</span>
+      </div>
+      <div class="label-actions">
+        <button id="btn-gapfill-confirm" class="hi">USE BEST MATCH</button>
+        <button id="btn-gapfill-skip">NOT IN IMAGE</button>
+        <button id="btn-gapfill-done">DONE GAP FILL</button>
       </div>
     </div>
     <textarea id="output" spellcheck="false"
@@ -1309,7 +1332,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.29 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.30 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -1868,6 +1891,7 @@ async function warmUp(medH,onProgress){
 
 // ── Match blob using net (float TinyNet or QuantizedNet) ─────────
 function matchBlob(blob,bin,W,net){
+  if(!net) return ''; // no net — only direct labels available
   const bw=blob.maxX-blob.minX+1,bh=blob.maxY-blob.minY+1;
   const bpx=new Uint8Array(bw*bh);
   for(let y=0;y<bh;y++) for(let x=0;x<bw;x++)
@@ -2130,7 +2154,7 @@ function clusterBlobs(comps,bin,W,maxClusters=20){
 
   // Simple greedy nearest-neighbor clustering
   const clusters=[]; // [{centroid:Float32Array, members:[idx], pixels:[Float32Array]}]
-  const THRESHOLD=0.85; // balanced — separates similar chars without over-fragmenting
+  const THRESHOLD=0.78; // lower threshold — splits P/F/R and similar stroke-sharing chars
 
   function cosSim(a,b){
     let dot=0,na=0,nb=0;
@@ -2215,108 +2239,200 @@ async function runLabelUI(clusters,medH){
   const modal=document.getElementById('label-modal');
   const grid=document.getElementById('cluster-grid');
   const progress=document.getElementById('label-progress');
+  const header=document.getElementById('label-header');
+  const hint=document.getElementById('label-hint');
   const input=document.getElementById('label-input');
+  const suggestion=document.getElementById('label-suggestion');
+  const btnDone=document.getElementById('btn-label-done');
   const labeled=new Map(); // clusterIdx → char
 
-  // Auto-match what we can, but always show at least MIN_CONFIRM_FLOOR
-  // clusters so stale library doesn't silently consume everything
-  const autoMatched=[];
-  const toLabel=[];
+  // Pre-compute auto-matches for all clusters — shown as suggestions, not hidden
+  const suggestions=new Map(); // clusterIdx → suggested char (may be null)
   for(let i=0;i<clusters.length;i++){
-    const auto=autoMatchCluster(clusters[i].centroid,medH);
-    if(auto){ autoMatched.push({i,auto}); }
-    else     { toLabel.push(i); }
+    suggestions.set(i, autoMatchCluster(clusters[i].centroid,medH));
   }
 
-  // Promote some auto-matched clusters back to toLabel for user confirmation
-  // so a stale library can be caught and corrected
-  const MIN_CONFIRM_FLOOR=5;
-  if(toLabel.length<MIN_CONFIRM_FLOOR){
-    const need=MIN_CONFIRM_FLOOR-toLabel.length;
-    const promoted=autoMatched.splice(0,Math.min(need,autoMatched.length));
-    for(const{i} of promoted) toLabel.push(i);
-  }
-
-  // Commit the remaining auto-matches that weren't promoted
-  for(const{i,auto} of autoMatched) labeled.set(i,auto);
-
-  if(toLabel.length===0){modal.classList.remove('on');return labeled;}
+  if(clusters.length===0){modal.classList.remove('on');return labeled;}
 
   modal.classList.add('on');
+  btnDone.disabled=false;
+  btnDone.textContent='DONE LABELING';
   input.value=''; input.focus();
 
-  const MIN_LABELS=Math.min(10,toLabel.length); // adaptive — never demand more than we have
-  const btnDone=document.getElementById('btn-label-done');
-
   return new Promise(resolve=>{
-    let idx=0, confirmed=0;
-
-    function updateDoneBtn(){
-      const remaining=Math.max(0,MIN_LABELS-confirmed);
-      if(remaining>0){
-        btnDone.disabled=true;
-        btnDone.textContent=`DONE (${remaining} more)`;
-        btnDone.style.opacity='0.4';
-      } else {
-        btnDone.disabled=false;
-        btnDone.textContent='DONE LABELING';
-        btnDone.style.opacity='1';
-      }
-    }
+    let idx=0;
 
     function showCluster(){
-      if(idx>=toLabel.length){
-        // Exhausted all clusters — resolve regardless of confirmed count
-        // so we never hang the pipeline
-        finish(true);
-        return;
+      if(idx>=clusters.length){ finish(); return; }
+      const cl=clusters[idx];
+      const suggested=suggestions.get(idx);
+
+      // Header and hint vary by whether we have a suggestion
+      if(suggested){
+        header.textContent='CONFIRM OR CORRECT — AUTO SUGGESTED';
+        hint.textContent=`Library suggests: "${suggested}" — confirm, correct, or skip`;
+        input.value=suggested;
+        suggestion.style.display='inline';
+      } else {
+        header.textContent='LABEL CLUSTERS — BUILD YOUR ATLAS';
+        hint.textContent='What character do these blobs show?';
+        input.value='';
+        suggestion.style.display='none';
       }
-      const ci=toLabel[idx];
-      const cl=clusters[ci];
-      progress.textContent=`cluster ${idx+1} of ${toLabel.length} · ${cl.members.length} blobs`;
+
+      progress.textContent=`cluster ${idx+1} of ${clusters.length}`;
       grid.innerHTML='';
       const show=cl.pixels.slice(0,6);
       for(const px of show) grid.appendChild(renderClusterCell(px.scaled,px.nativeW,px.nativeH));
-      input.value=''; input.focus();
-      updateDoneBtn();
+      input.focus();
+      input.select();
     }
 
     function confirm(){
       const ch=input.value.trim();
-      if(!ch||ch.length!==1) return;
-      const ci=toLabel[idx];
-      labeled.set(ci,ch);
-      for(const px of clusters[ci].pixels) addToLib(ch,px.scaled,medH);
-      confirmed++; idx++; showCluster();
+      if(!ch||ch.length!==1){ skip(); return; } // empty confirm = skip
+      labeled.set(idx,ch);
+      for(const px of clusters[idx].pixels) addToLib(ch,px.scaled,medH);
+      idx++; showCluster();
     }
 
-    function skip(){idx++;showCluster();}
+    function skip(){ idx++; showCluster(); }
 
-    function finish(forced=false){
-      // Allow early exit only if minimum met OR forced (clusters exhausted)
-      if(!forced&&confirmed<MIN_LABELS&&idx<toLabel.length) return;
-      btnDone.disabled=false;
-      btnDone.textContent='DONE LABELING';
-      btnDone.style.opacity='1';
+    function finish(){
       modal.classList.remove('on');
       resolve(labeled);
     }
 
     document.getElementById('btn-label-confirm').onclick=confirm;
     document.getElementById('btn-label-skip').onclick=skip;
-    document.getElementById('btn-label-done').onclick=()=>finish(false);
-    input.onkeydown=e=>{if(e.key==='Enter')confirm();if(e.key==='Escape')skip();};
+    document.getElementById('btn-label-done').onclick=finish;
+    input.onkeydown=e=>{
+      if(e.key==='Enter') confirm();
+      if(e.key==='Escape') skip();
+      if(e.key==='Tab'){ e.preventDefault(); skip(); }
+    };
 
     showCluster();
   });
 }
 
-// ── Update warmUp to use library entries ─────────────────────────
-// Library entries are weighted 2× over synthetic — real beats synth.
-// Cache is invalidated if medH drifts >20% OR library size has changed.
-let _trainedLibCount=0; // library size when net was last trained
+// ── Render a synthetic reference glyph for gap-fill display ─────
+function renderRefGlyph(ch,medH){
+  const h=Math.max(16,Math.min(64,medH));
+  const cw=Math.ceil(h*1.6), ch_h=Math.ceil(h*1.8);
+  const c=document.createElement('canvas');
+  c.width=cw; c.height=ch_h;
+  c.style.width='48px'; c.style.height='48px';
+  c.style.imageRendering='pixelated';
+  c.style.border='1px solid var(--amber-dim)';
+  c.style.background='var(--deep)';
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='var(--deep)';
+  ctx.fillRect(0,0,cw,ch_h);
+  ctx.fillStyle='rgba(232,160,64,0.9)';
+  ctx.font=`${h}px sans-serif`;
+  ctx.textBaseline='middle';
+  const tw=ctx.measureText(ch).width;
+  ctx.fillText(ch,Math.max(0,(cw-tw)/2),ch_h*0.55);
+  return c;
+}
+
+// ════════════════════════════════════════════════════════════════
+// GAP FILL UI — after cluster labeling, show chars with no real
+// library samples and ask user to find/confirm them in the image.
+// Returns Promise — resolves when user hits DONE GAP FILL.
+// bestGuesses: Map<char, {pixels, nativeW, nativeH}> — net's best
+// candidate blob for each uncovered char (may be null).
+// ════════════════════════════════════════════════════════════════
+async function runGapFillUI(uncoveredChars, bestGuesses, clusters, medH){
+  const modal=document.getElementById('gapfill-modal');
+  const grid=document.getElementById('gapfill-grid');
+  const progress=document.getElementById('gapfill-progress');
+  const input=document.getElementById('gapfill-input');
+
+  if(uncoveredChars.length===0){ return; }
+
+  modal.classList.add('on');
+  input.value=''; input.focus();
+
+  return new Promise(resolve=>{
+    let idx=0;
+
+    function showChar(){
+      if(idx>=uncoveredChars.length){ finish(); return; }
+      const ch=uncoveredChars[idx];
+      progress.textContent=`gap char ${idx+1} of ${uncoveredChars.length}`;
+      input.value=ch;
+      grid.innerHTML='';
+
+      // Left: reference render (amber tinted, labeled REF)
+      const refWrap=document.createElement('div');
+      refWrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;';
+      const refLabel=document.createElement('span');
+      refLabel.style.cssText='font-size:7px;color:var(--amber-dim);letter-spacing:.1em;';
+      refLabel.textContent='REF';
+      refWrap.appendChild(refLabel);
+      refWrap.appendChild(renderRefGlyph(ch,medH));
+      grid.appendChild(refWrap);
+
+      // Right: best candidate blob from image (if any)
+      const guess=bestGuesses.get(ch);
+      if(guess){
+        const guessWrap=document.createElement('div');
+        guessWrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;';
+        const guessLabel=document.createElement('span');
+        guessLabel.style.cssText='font-size:7px;color:var(--text-lo);letter-spacing:.1em;';
+        guessLabel.textContent='BEST MATCH';
+        guessWrap.appendChild(guessLabel);
+        guessWrap.appendChild(renderClusterCell(guess.pixels,guess.nativeW,guess.nativeH));
+        grid.appendChild(guessWrap);
+      }
+
+      input.focus(); input.select();
+    }
+
+    function confirmChar(){
+      const ch=input.value.trim();
+      if(!ch||ch.length!==1){ skip(); return; }
+      const guess=bestGuesses.get(uncoveredChars[idx]);
+      if(guess) addToLib(ch,guess.pixels,medH);
+      idx++; showChar();
+    }
+
+    function skip(){ idx++; showChar(); }
+
+    function finish(){
+      modal.classList.remove('on');
+      resolve();
+    }
+
+    document.getElementById('btn-gapfill-confirm').onclick=confirmChar;
+    document.getElementById('btn-gapfill-skip').onclick=skip;
+    document.getElementById('btn-gapfill-done').onclick=finish;
+    input.onkeydown=e=>{
+      if(e.key==='Enter') confirmChar();
+      if(e.key==='Escape') skip();
+      if(e.key==='Tab'){ e.preventDefault(); skip(); }
+    };
+
+    showChar();
+  });
+}
+// ── WARM UP — library-only training, no synth ────────────────────
+// Synth removed entirely. Training data = real labeled blobs only.
+// If library is empty, skip training — blobLabels handles direct matches.
+// Cache invalidates if medH drifts >20% OR library size changed.
+let _trainedLibCount=0;
 async function warmUpWithLib(medH,labeledSamples,onProgress){
   const curLibCount=libCount();
+
+  // Skip training entirely if library is empty
+  if(curLibCount===0){
+    onProgress(1.0,'no library — using direct labels only');
+    _trainedNet=null; _trainedAtH=0; _trainedLibCount=0;
+    return null;
+  }
+
   if(_trainedNet&&Math.abs(_trainedAtH-medH)/_trainedAtH<0.20
      &&labeledSamples.size===0&&curLibCount===_trainedLibCount){
     onProgress(1.0,'reusing cached network'); return _trainedNet;
@@ -2324,18 +2440,13 @@ async function warmUpWithLib(medH,labeledSamples,onProgress){
 
   const net=new TinyNet();
   const h=Math.max(12,Math.min(64,medH));
-  const cw=Math.ceil(h*1.4),ch_h=Math.ceil(h*1.5);
-  const c=document.createElement('canvas');
-  c.width=cw; c.height=ch_h;
-  const ctx=c.getContext('2d');
-  ctx.textBaseline='middle';
 
-  onProgress(0,'generating training data…');
+  onProgress(0,'building training data from library…');
   const Xs=[],Ys=[];
 
-  // 1. Library entries — only use entries matching current font context
-  const LIB_WEIGHT=2;
-  const LIB_CAP=20; // max samples per char — prevents common letters dominating
+  // Library entries only — real beats synth, always
+  const LIB_WEIGHT=3;
+  const LIB_CAP=30;
   const fp=getCurrentFontFP(medH);
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
@@ -2343,22 +2454,17 @@ async function warmUpWithLib(medH,labeledSamples,onProgress){
     let used=0;
     for(const s of samples){
       if(used>=LIB_CAP) break;
-      // Use entry if it has no fingerprint (legacy) or matches current font
       if(s.fontFP&&s.fontFP!==fp) continue;
       for(let w=0;w<LIB_WEIGHT;w++){Xs.push(s.pixels);Ys.push(ci);}
       used++;
     }
   }
 
-  // 2. Synthetic coverage
-  for(let ci=0;ci<N_CHARS;ci++){
-    const ch=CHARS[ci];
-    for(let v=0;v<SYNTH_PER_CHAR;v++){
-      const x=makeSynth(ctx,ch,h,cw,ch_h,v);
-      let ink=0; for(let i=0;i<x.length;i++) ink+=x[i];
-      if(ink>2){Xs.push(x);Ys.push(ci);}
-    }
+  if(Xs.length===0){
+    onProgress(1.0,'no matching library entries for this font');
+    _trainedNet=null; return null;
   }
+
   await tick();
 
   // Shuffle
@@ -2452,12 +2558,62 @@ async function jsPipelinePath(bin,W,H){
   const clusters=clusterBlobs(filteredComps,bin,W,40);
   setStage('cluster','done');
 
-  // LABEL — show UI for unlabeled clusters
+  // LABEL — show ALL clusters, auto-match pre-filled, no minimum
   setStage('label','active'); await tick();
   const labeledMap=await runLabelUI(clusters,medH);
   setStage('label','done');
 
-  // WARM UP — train with library + synthetic
+  // GAP FILL — find chars with zero library coverage, show reference + best guess
+  // Build best-guess map: for each uncovered char, find the cluster whose centroid
+  // is most similar to a rendered reference glyph at medH
+  const coveredChars=new Set(sacatLib.keys());
+  const uncoveredChars=CHARS.split('').filter(ch=>!coveredChars.has(ch));
+
+  if(uncoveredChars.length>0 && clusters.length>0){
+    // Build best-guess: for each uncovered char, find best cluster by cosine to ref render
+    const h=Math.max(12,Math.min(64,medH));
+    const cw=Math.ceil(h*1.6), ch_h=Math.ceil(h*1.8);
+    const rc=document.createElement('canvas');
+    rc.width=cw; rc.height=ch_h;
+    const rctx=rc.getContext('2d');
+    rctx.textBaseline='middle';
+
+    const bestGuesses=new Map();
+    function cosSim(a,b){
+      let dot=0,na=0,nb=0;
+      for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
+      const d=Math.sqrt(na)*Math.sqrt(nb); return d>0?dot/d:0;
+    }
+
+    for(const ch of uncoveredChars){
+      // Render reference glyph and scale to 48×48
+      rctx.clearRect(0,0,cw,ch_h);
+      rctx.fillStyle='#fff';
+      rctx.font=`${h}px sans-serif`;
+      const tw=rctx.measureText(ch).width;
+      rctx.fillText(ch,Math.max(0,(cw-tw)/2),ch_h*0.55);
+      const raw=rctx.getImageData(0,0,cw,ch_h).data;
+      const bin2=new Uint8Array(cw*ch_h);
+      for(let i=0;i<cw*ch_h;i++) bin2[i]=raw[i*4+3]>90?1:0;
+      const refVec=scaleBin(bin2,cw,ch_h);
+
+      // Find cluster whose centroid best matches this reference
+      let bestSim=0, bestPx=null;
+      for(const cl of clusters){
+        const sim=cosSim(cl.centroid,refVec);
+        if(sim>bestSim){
+          bestSim=sim;
+          const px=cl.pixels[0];
+          bestPx={pixels:px.scaled,nativeW:px.nativeW,nativeH:px.nativeH};
+        }
+      }
+      if(bestSim>0.30) bestGuesses.set(ch,bestPx); // only show if plausibly similar
+    }
+
+    await runGapFillUI(uncoveredChars,bestGuesses,clusters,medH);
+  }
+
+  // WARM UP — library-only training (no synth)
   setStage('warm','active'); await tick();
   const net=await warmUpWithLib(medH,labeledMap,(prog,msg)=>{
     const pct=Math.round(prog*100);
@@ -2473,15 +2629,17 @@ async function jsPipelinePath(bin,W,H){
   });
   setStage('warm','done');
 
-  // QUANTIZE — convert float32 L1 to TMAC ternary lookup tables
-  // 4× faster inference at no accuracy cost, enables 48×48 input
-  setStage('quant','active'); await tick();
-  const qnet=new QuantizedNet(net);
-  setStage('quant','done');
+  // QUANTIZE — skip if no net (library was empty, direct labels only)
+  let qnet=null;
+  if(net){
+    setStage('quant','active'); await tick();
+    qnet=new QuantizedNet(net);
+    setStage('quant','done');
+  } else {
+    setStage('quant','done'); // mark done even if skipped
+  }
 
-  // MATCH — TMAC ternary forward pass per blob
-  // labeledMap: clusterIdx → char; clusters[i].members: [compIdx...]
-  // Build blobLabels: origCompIdx → char for direct short-circuit
+  // MATCH — direct labels short-circuit net; net used for unlabeled blobs
   setStage('match','active'); await tick();
   const blobLabels=new Map();
   for(const[clusterIdx,ch] of labeledMap){

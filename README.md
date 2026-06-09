@@ -69,7 +69,16 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v29 (current)
+### v30 (current)
+- **All clusters shown during LABEL** — no more hidden auto-matches; every cluster displayed with library suggestion pre-filled in input box; user confirms, corrects, or skips each one
+- **DONE always available** — no minimum label count, no countdown; you label what you want and move on
+- **Gap fill phase added** — after cluster labeling, any character with zero library coverage gets a reference render + best-match blob from the image; user confirms or marks "not in image"; builds library coverage organically
+- **Synth removed** — training data is 100% real labeled blobs; no more synthetic interference with chars you've already labeled; `warmUpWithLib` is library-only
+- **Net skipped cleanly when library empty** — WARM UP + QUANTIZE skip gracefully if library has no matching entries; blobLabels handles direct matches without net
+- **Cluster threshold lowered 0.85→0.78** — P/F/R and similar stroke-sharing chars now split into separate clusters
+- **Tab key skips cluster** — Tab/Escape both skip, Enter confirms
+
+### v29
 - **Label modal hang fixed** — stale localStorage library no longer silently auto-matches all clusters; `MIN_CONFIRM_FLOOR=5` always promotes at least 5 clusters to manual review
 - **Pipeline freeze fixed** — `finish()` now resolves the Promise when clusters are exhausted even if minimum label count wasn't reached; `MIN_LABELS` adapts to cluster count
 - **Labeling actually affects output** — labeled clusters now short-circuit neural net inference at MATCH time; blobs whose cluster was labeled get that char directly, no margin check, no uncertainty
