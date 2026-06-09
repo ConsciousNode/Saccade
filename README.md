@@ -18,21 +18,21 @@ It works on any modern browser. It works offline. It works on your phone.
 INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → LABEL → WARM UP → QUANTIZE → MATCH → EMIT
 ```
 
-**SEGMENT** finds connected ink blobs in the binarized image using a union-find flood fill.
+**SEGMENT** finds connected ink blobs in the binarized image using a union-find flood fill, then runs a dot/tail merge pass to reconnect `i`, `j`, `!`, `?` and citation superscripts before clustering.
 
-**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. The most populated clusters surface first — those are the most common characters in your image.
+**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. Hull fill ratio filtering removes bracket fragments and corner noise before clustering. Up to 40 clusters per image, sorted by population.
 
-**LABEL** shows you each cluster: six example blobs rendered at native resolution. You type what character they show. The tool learns from you.
+**LABEL** shows each cluster at native blob resolution — six example blobs, rendered crisp. You type the character. Minimum 20 labels required before DONE LABELING unlocks, counting down live.
 
-**WARM UP** trains a tiny two-layer neural network (`2304→64→95`) on your labeled samples plus synthetic augmentation, using cross-entropy loss and cosine LR decay. Runs in the background, yields to the UI every 200 steps, shows progress live.
+**WARM UP** trains a two-layer neural net (`2304→64→95`) on labeled samples plus synthetic augmentation. Cross-entropy loss, cosine LR decay, 45 epochs. Progress shown live in the pipeline strip.
 
-**QUANTIZE** converts the trained float32 layer-1 weights to ternary `{-1, 0, +1}` using BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴ = 81 patterns per 4-weight chunk). Inference becomes table lookups — no multiplies. 4× faster than float32 at 48×48 input resolution.
+**QUANTIZE** converts trained float32 L1 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk). Inference at 48×48 costs the same as float32 at 32×32.
 
-**MATCH** runs each blob through the quantized net. If the margin between top-1 and top-2 probability is below 0.15, the blob is skipped rather than guessed wrong.
+**MATCH** runs each blob through the quantized net. Blobs where the margin between top-1 and top-2 probability is below 0.08 are skipped — uncertainty is honest silence, not wrong output.
 
 ## The library
 
-Every labeling session builds your `.sacat` atlas file. Export it. Import it on any device. The library fingerprints each entry by font context — labels from a serif document won't contaminate a sans-serif one. Each subsequent run auto-matches previously labeled clusters, so the LABEL stage gets shorter over time.
+Every session builds your `.sacat` atlas file — a JSON archive of labeled blob samples, font-fingerprinted to prevent cross-font contamination. Export it, import it anywhere. The library auto-matches previously labeled clusters so the LABEL stage gets shorter with every run.
 
 ```
 📚 Library: 30 chars · 579 samples
@@ -42,44 +42,86 @@ Every labeling session builds your `.sacat` atlas file. Export it. Import it on 
 
 1. Open `Saccade.html` in any modern browser
 2. Drop or select an image
-3. Label the character clusters that appear (minimum 20 to unlock DONE LABELING)
-4. Wait for WARM UP and QUANTIZE
+3. Label at least 20 character clusters
+4. Wait for WARM UP and QUANTIZE (~90 seconds on mobile)
 5. Copy the extracted text
-
-Export your `.sacat` library after labeling to keep it for future sessions.
+6. Export your `.sacat` library to keep labels for next time
 
 ## Philosophy
 
-- **Single file.** The entire tool is `Saccade.html`. No build step. No dependencies. Copy it anywhere.
+- **Single file.** The entire tool is `Saccade.html`. No build step. No dependencies.
 - **Xinu compliant.** Browser as bare metal. The only runtime is what ships with the browser.
-- **Offline first.** Nothing leaves your device. The neural net trains locally, infers locally.
-- **Browser agnostic.** Tested on Android Chrome. Designed for any modern engine.
+- **Offline first.** Nothing leaves your device.
+- **Browser agnostic.** Any modern engine. Tested on Android Chrome.
 
 ## Technical lineage
 
-Saccade is built on ConsciousNode's in-house neural stack:
+Built on ConsciousNode's in-house neural stack:
 
-- **TinyNet** — two-layer classifier (`LinearLayer`, ReLU, softmax cross-entropy) pulled from Simulacra's architecture
-- **TMAC** — ternary matrix multiplication via lookup tables, derived from BitNet b1.58 and FPSS's ternary quantization
-- **Adaptive threshold** — integral image Sauvola-style binarization
-- **Union-find segmentation** — connected component labeling, dot/tail merge pass
+- **TinyNet** — two-layer classifier pulled from Simulacra's LinearLayer architecture
+- **TMAC** — ternary matrix multiplication via lookup tables, derived from BitNet b1.58 and FPSS
+- **Adaptive threshold** — integral image binarization with dark-background auto-detection
+- **Union-find segmentation** — connected component labeling with dot/tail merge
 - **Greedy nearest-neighbor clustering** — cosine similarity at 48×48, hull fill filter
 
-No external libraries were used. No pre-trained weights were shipped.
+No external libraries. No pre-trained weights.
 
-## Development story
+## Changelog
 
-Saccade started as a projection-profile matcher — computing 8-angle ink histograms per blob and comparing them via cosine similarity against a rendered character atlas. This worked poorly. The profiles weren't discriminative enough at small sizes, and the atlas font never matched the screenshot font.
+### v28 (current)
+- Fixed `.sacat` import: `fontFP` now preserved through export/import round-trip; imported entries no longer silently dropped at training time
+- Confidence margin lowered 0.15→0.08 for better recall at 48×48 input resolution
+- Epochs bumped 35→45 for better convergence
 
-The v4 engine replaced the atlas entirely with a trained classifier. After segmentation, blobs are clustered by visual similarity and the user labels the clusters — teaching Saccade what characters actually look like in *this image*, at *this font*, at *this size*. The labeled samples become training data for a tiny neural net that warms up right there in the browser.
+### v27
+- Cluster previews now render at **native blob resolution** instead of upsampled 48×48 — eliminates scanline artifacts on dark-background images
+- Native blob dimensions stored with cluster pixels throughout pipeline
 
-The TMAC quantization step came from asking: what from the ConsciousNode neural stack could help here? The answer was BitNet-style ternary inference. After float32 training, layer-1 weights compress to lookup tables. Inference at 48×48 costs the same compute as float32 at 32×32 — but with 2.25× more discriminative pixels.
+### v26
+- **48×48 input resolution** (up from 32×32) — 2.25× more discriminative pixels
+- **TMAC ternary inference** — BitNet b1.58 absmean quantization, 3⁴=81 pattern lookup tables, 4× faster inference; new QUANTIZE stage in pipeline strip
+- `P/R/F` disambiguation improved at higher resolution
 
-The `.sacat` library format makes the tool accumulate intelligence across sessions. Each labeled image contributes to a persistent atlas that grows richer with use, indexed by font fingerprint so different font contexts don't contaminate each other.
+### v25
+- Minimum 20 labels required before DONE LABELING unlocks (counts down live)
+- Max clusters raised 30→40
+- Hull fill ratio filter added — removes bracket/corner fragment clusters before labeling
 
-Active development is ongoing. The architecture is stable; the accuracy is improving.
+### v24
+- Library samples capped at 20 per character to prevent frequency bias in training
+- Confidence margin gate added to matchBlob — uncertain predictions emit nothing
+
+### v23
+- Cluster similarity threshold tuned to 0.85
+- Ink density filter lowered to 5% — round letters no longer filtered out
+
+### v22
+- Font fingerprinting — each library entry tagged with hash of rendered reference chars; cross-font contamination prevented
+- `.sacat` export now uses `application/octet-stream` MIME type (correct `.sacat` extension)
+
+### v21
+- Training speed 4-5min → ~90s: HIDDEN_DIM 128→64, SYNTH_PER_CHAR 40→15, EPOCHS 60→35
+- Dot/tail blob merge pass added (fixes `i`, `j`, `!`, `?`, citation numbers)
+- PROSE_PRIOR removed — library is the prior now
+
+### v20
+- `.sacat` persistent character library (localStorage + export/import)
+- CLUSTER stage: greedy nearest-neighbor grouping by cosine similarity
+- LABEL stage: interactive UI, 6 blob previews per cluster, confirm/skip flow
+- WARM UP trains on library entries (weighted ×2) + synthetic augmentation
+- Font fingerprinting via `computeFontFingerprint()`
+
+### v19
+- Neural classifier replaces profile-based matcher entirely
+- TinyNet: 1024→128→95, trained on synthetic data at medH per image
+- WARM UP stage added to pipeline
+
+### v12–v18
+- Profile-based matching engine iterations (8-angle projections, hole detection, PROSE_PRIOR, atlas font tuning)
+- WAT kernel integration (standby mode)
+- Preprocessing pipeline established and confirmed working
 
 ---
 
-*ConsciousNode SoftWorks — Greenwood, South Carolina*  
+*ConsciousNode SoftWorks — Greenwood, South Carolina*
 *Built by Kham and Vael Interim*

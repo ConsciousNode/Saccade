@@ -1532,7 +1532,7 @@ const N_CHARS=CHARS.length; // 95
 const INPUT_DIM=48*48; // 2304 — 48×48 blob input      // 1024 — blob scaled to 32×32
 const HIDDEN_DIM=64;        // smaller hidden — faster on mobile
 const SYNTH_PER_CHAR=15;    // synthetic samples — library data compensates
-const EPOCHS=35;            // fewer epochs — higher LR compensates
+const EPOCHS=45;            // fewer epochs — higher LR compensates
 const LR=0.10;
 
 // ── LinearLayer (from Simulacra) ─────────────────────────────────
@@ -1869,7 +1869,7 @@ function matchBlob(blob,bin,W,net){
   }
   // Require margin of 0.15 between top-2 — emit nothing if uncertain
   const margin=prob[best]-prob[second];
-  if(margin<0.15) return '';
+  if(margin<0.08) return '';
   return CHARS[best];
 }
 
@@ -1951,7 +1951,7 @@ function sacatToJSON(){
   for(const[ch,samples] of sacatLib){
     for(const s of samples){
       entries.push({char:ch,pixels:Array.from(s.pixels),
-        medH:s.medH,source:s.source,timestamp:s.timestamp});
+        medH:s.medH,source:s.source,timestamp:s.timestamp,fontFP:s.fontFP||null});
     }
   }
   return JSON.stringify({version:SACAT_VERSION,format:'sacat',entries},null,0);
@@ -1972,7 +1972,7 @@ function sacatFromJSON(json){
       for(let i=0;i<px.length;i++){dot+=px[i]*ex.pixels[i];na+=px[i]*px[i];nb+=ex.pixels[i]*ex.pixels[i];}
       if(dot/Math.sqrt(na*nb)>0.97){dup=true;break;}
     }
-    if(!dup){existing.push({pixels:px,medH:e.medH,source:e.source,timestamp:e.timestamp});added++;}
+    if(!dup){existing.push({pixels:px,medH:e.medH,source:e.source,timestamp:e.timestamp,fontFP:e.fontFP||null});added++;}
   }
   return added;
 }
