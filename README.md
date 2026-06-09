@@ -69,7 +69,13 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v30 (current)
+### v31 (current)
+- Gap fill threshold raised 0.30→0.50 — only shows chars where the image actually has a plausible match; no more being asked about `}` and `~` on a prose image
+- Gap fill now only iterates chars that crossed the threshold — skips the rest entirely
+- `autocapitalize="none"` on both label and gap fill inputs — mobile keyboard no longer auto-capitalises first char
+- "USE BEST MATCH" renamed to "CONFIRM + ADD" for clarity
+
+### v30
 - **All clusters shown during LABEL** — no more hidden auto-matches; every cluster displayed with library suggestion pre-filled in input box; user confirms, corrects, or skips each one
 - **DONE always available** — no minimum label count, no countdown; you label what you want and move on
 - **Gap fill phase added** — after cluster labeling, any character with zero library coverage gets a reference render + best-match blob from the image; user confirms or marks "not in image"; builds library coverage organically

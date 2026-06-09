@@ -1286,7 +1286,7 @@
       <div class="cluster-grid" id="cluster-grid"></div>
       <div class="label-hint" id="label-hint">What character do these blobs show?</div>
       <div class="label-input-row">
-        <input id="label-input" maxlength="1" autocomplete="off" spellcheck="false" placeholder="?">
+        <input id="label-input" maxlength="1" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="?">
         <span id="label-suggestion" style="display:none;font-size:8px;color:var(--amber-dim);letter-spacing:.1em;">← suggested</span>
       </div>
       <div class="label-actions">
@@ -1306,11 +1306,11 @@
       <div class="cluster-grid" id="gapfill-grid"></div>
       <div class="label-hint" id="gapfill-hint">Reference render — find this in your image</div>
       <div class="label-input-row">
-        <input id="gapfill-input" maxlength="1" autocomplete="off" spellcheck="false" placeholder="?">
+        <input id="gapfill-input" maxlength="1" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="?">
         <span style="font-size:8px;color:var(--text-lo);letter-spacing:.1em;">← confirm char</span>
       </div>
       <div class="label-actions">
-        <button id="btn-gapfill-confirm" class="hi">USE BEST MATCH</button>
+        <button id="btn-gapfill-confirm" class="hi">CONFIRM + ADD</button>
         <button id="btn-gapfill-skip">NOT IN IMAGE</button>
         <button id="btn-gapfill-done">DONE GAP FILL</button>
       </div>
@@ -1332,7 +1332,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.30 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.31 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2607,10 +2607,10 @@ async function jsPipelinePath(bin,W,H){
           bestPx={pixels:px.scaled,nativeW:px.nativeW,nativeH:px.nativeH};
         }
       }
-      if(bestSim>0.30) bestGuesses.set(ch,bestPx); // only show if plausibly similar
+      if(bestSim>0.50) bestGuesses.set(ch,bestPx); // only show plausible matches
     }
 
-    await runGapFillUI(uncoveredChars,bestGuesses,clusters,medH);
+    await runGapFillUI(uncoveredChars.filter(ch=>bestGuesses.has(ch)),bestGuesses,clusters,medH);
   }
 
   // WARM UP — library-only training (no synth)
