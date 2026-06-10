@@ -69,7 +69,16 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v34 (current)
+### v35 (current)
+- **Debug drawer added** — toggle with DEBUG button in output bar; four tabs:
+  - **BLOBS** — per-blob table: position, output char, source (direct/net/blank), margin, top-1, top-2
+  - **CLUSTERS** — cluster index, label, blob count, sample count
+  - **TRAINING** — samples per char used in training; zero-coverage chars highlighted red
+  - **LIBRARY** — full library breakdown sorted by sample count, fingerprinted sample count per char
+- `matchBlobDebug` variant returns full confidence record without duplicating matchBlob logic
+- `--green` and `--red` CSS variables added to theme
+
+### v34
 - **fontFP gate removed from training** — warmUpWithLib now uses all library samples regardless of font fingerprint; gate was silently dropping vowels labeled at slightly different medH values
 - **Margin threshold raised 0.08→0.12** — net now blanks uncertain matches rather than guessing wrong chars (fixes spurious `*` in output)
 - Unused `fp` variable removed from warmUpWithLib
