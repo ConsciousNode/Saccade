@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v36 (current)
+### v37 (current)
+- **Class imbalance fixed** — training now caps at 20 entries per char (not samples×weight), so `t`=71 and `o`=4 get equal representation; previously `t`/`n`/`h` were drowning everything else causing margin 0.00 on all net inferences
+- **Inverse frequency weighting** — rare chars get proportionally higher effective LR (up to 8×) during training; forces net to learn boundaries for low-sample chars
+- **Large cluster warning** — label modal shows ⚠ N blobs when a cluster has >50 members so you don't accidentally skip the most important cluster
+
+### v36
 - **Debug panel crash fixed** — panels wrapped in try/catch so any rendering error never kills the pipeline or blanks output
 - **Spread guard in lineToString** — explicit field copy replaces `{...d}` spread to prevent unexpected throw
 - **emit-done stage** now fires after debug panels complete, so green dot accurately reflects full completion

@@ -1406,7 +1406,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.36 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.37 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2391,7 +2391,7 @@ async function runLabelUI(clusters,medH){
         suggestion.style.display='none';
       }
 
-      progress.textContent=`cluster ${idx+1} of ${clusters.length}`;
+      progress.textContent=`cluster ${idx+1} of ${clusters.length}${cl.members.length>50?' ⚠ '+cl.members.length+' blobs':' · '+cl.members.length+' blobs'}`;
       grid.innerHTML='';
       const show=cl.pixels.slice(0,6);
       for(const px of show) grid.appendChild(renderClusterCell(px.scaled,px.nativeW,px.nativeH));
@@ -2555,20 +2555,17 @@ async function warmUpWithLib(medH,onProgress){
   onProgress(0,'building training data from library…');
   const Xs=[],Ys=[];
 
-  // Library entries only — all samples regardless of font fingerprint
-  const LIB_WEIGHT=3;
-  const LIB_CAP=30;
+  // Cap total entries per char — not per sample — so LIB_WEIGHT doesn't bypass the cap
+  // This prevents t/n/h drowning out rare chars
+  const MAX_ENTRIES=20; // hard ceiling on training vectors per char
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
     if(ci<0) continue;
-    let used=0;
+    let entries=0;
     for(const s of samples){
-      if(used>=LIB_CAP) break;
-      // No fontFP gate here — use all library entries for training.
-      // fontFP filtering only happens in autoMatchCluster (suggestions).
-      // Gate was losing vowel samples labeled at slightly different medH.
-      for(let w=0;w<LIB_WEIGHT;w++){Xs.push(s.pixels);Ys.push(ci);}
-      used++;
+      if(entries>=MAX_ENTRIES) break;
+      Xs.push(s.pixels); Ys.push(ci);
+      entries++;
     }
   }
 
@@ -2586,6 +2583,12 @@ async function warmUpWithLib(medH,onProgress){
     [Ys[i],Ys[j]]=[Ys[j],Ys[i]];
   }
 
+  // Build inverse-frequency class weights — rare chars get proportionally higher LR
+  const classCounts=new Array(N_CHARS).fill(0);
+  for(const y of Ys) classCounts[y]++;
+  const maxCount=Math.max(1,...classCounts);
+  const classWeights=classCounts.map(c=>c>0?Math.min(maxCount/c,8):1); // cap weight at 8×
+
   const totalSteps=EPOCHS*Xs.length;
   let step=0,lrNow=LR;
   const YIELD_EVERY=200;
@@ -2593,7 +2596,7 @@ async function warmUpWithLib(medH,onProgress){
   for(let epoch=0;epoch<EPOCHS;epoch++){
     lrNow=LR*0.5*(1+Math.cos(Math.PI*epoch/EPOCHS));
     for(let i=0;i<Xs.length;i++){
-      net.trainStep(Xs[i],Ys[i],lrNow);
+      net.trainStep(Xs[i],Ys[i],lrNow*classWeights[Ys[i]]);
       step++;
       if(step%YIELD_EVERY===0){
         onProgress(step/totalSteps,`epoch ${epoch+1}/${EPOCHS}`);
