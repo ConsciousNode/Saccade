@@ -1259,7 +1259,7 @@
       <span class="ssep">›</span>
       <div class="stage" id="st-label"><div class="sdot"></div>LABEL</div>
       <span class="ssep">›</span>
-      <div class="stage" id="st-warm"><div class="sdot"></div>WARM UP</div>
+      <div class="stage" id="st-warm"><div class="sdot"></div>WARM UP<span id="warm-pct" style="margin-left:4px;font-size:7px;color:var(--text-lo);"></span></div>
       <span class="ssep">›</span>
       <div class="stage" id="st-quant"><div class="sdot"></div>QUANTIZE</div>
       <span class="ssep">›</span>
@@ -1332,7 +1332,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.32 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.33 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -1432,13 +1432,8 @@ async function runPipeline(bitmap){
   renderBinaryCanvas(binary,width,height);
   await tick(); setStage('thresh','done');
 
-  if('TextDetector' in window){
-    modeLabel.textContent='TextDetector';
-    await textDetectorPath(bitmap);
-  } else {
-    modeLabel.textContent='Saccade OCR v4';
-    await jsPipelinePath(binary,width,height);
-  }
+  modeLabel.textContent='SACCADE OCR V4';
+  await jsPipelinePath(binary,width,height);
   processing=false;
 }
 
@@ -1522,23 +1517,8 @@ function renderBinaryCanvas(bin,W,H){
 }
 
 // ════════════════════════════════════════════════════════════════
-// ENGINE A: TextDetector
 // ════════════════════════════════════════════════════════════════
-async function textDetectorPath(bitmap){
-  setStage('seg','active');
-  try{
-    const det=new TextDetector();
-    const results=await det.detect(bitmap);
-    setStage('seg','done'); setStage('atlas','done'); setStage('match','active');
-    results.sort((a,b)=>{const dy=a.boundingBox.top-b.boundingBox.top;return Math.abs(dy)>10?dy:a.boundingBox.left-b.boundingBox.left;});
-    setStage('match','done'); setStage('emit','active');
-    emitText(results.map(r=>r.rawValue).join('\n'));
-    setStage('emit','done');
-  } catch(e){ emitText('// TextDetector failed — use NEW IMAGE to retry'); }
-}
-
-// ════════════════════════════════════════════════════════════════
-// ENGINE B: Saccade OCR v2 — IoU morphological matching
+// ENGINE: Saccade OCR v2 — IoU morphological matching
 // ════════════════════════════════════════════════════════════════
 
 // ── Connected component flood fill ───────────────────────────────
@@ -2439,7 +2419,7 @@ async function runGapFillUI(uncoveredChars, bestGuesses, clusters, medH){
 // If library is empty, skip training — blobLabels handles direct matches.
 // Cache invalidates if medH drifts >20% OR library size changed.
 let _trainedLibCount=0;
-async function warmUpWithLib(medH,labeledSamples,onProgress){
+async function warmUpWithLib(medH,onProgress){
   const curLibCount=libCount();
 
   // Skip training entirely if library is empty
@@ -2450,7 +2430,7 @@ async function warmUpWithLib(medH,labeledSamples,onProgress){
   }
 
   if(_trainedNet&&Math.abs(_trainedAtH-medH)/_trainedAtH<0.20
-     &&labeledSamples.size===0&&curLibCount===_trainedLibCount){
+     &&curLibCount===_trainedLibCount){
     onProgress(1.0,'reusing cached network'); return _trainedNet;
   }
 
@@ -2631,17 +2611,9 @@ async function jsPipelinePath(bin,W,H){
 
   // WARM UP — library-only training (no synth)
   setStage('warm','active'); await tick();
-  const net=await warmUpWithLib(medH,labeledMap,(prog,msg)=>{
-    const pct=Math.round(prog*100);
-    const stageEl=document.getElementById('st-warm');
-    if(stageEl){
-      const txt=stageEl.querySelector('span')||(() => {
-        const s=document.createElement('span');
-        s.style.cssText='margin-left:4px;font-size:7px;color:var(--text-lo);';
-        stageEl.appendChild(s); return s;
-      })();
-      txt.textContent=prog<1?`${pct}%`:'';
-    }
+  const net=await warmUpWithLib(medH,(prog,msg)=>{
+    const pct=document.getElementById('warm-pct');
+    if(pct) pct.textContent=prog<1?`${Math.round(prog*100)}%`:'';
   });
   setStage('warm','done');
 

@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v32 (current)
+### v33 (current)
+- **TextDetector removed** — Saccade always uses its own pipeline; no browser API fallback, fully browser-agnostic as intended
+- **WARM UP progress span fixed** — dedicated `#warm-pct` element in HTML, no more re-creation on every callback tick
+- **`labeledSamples` parameter removed** — was passed to `warmUpWithLib` but never used; cache check now only considers medH drift and library size
+
+### v32
 - **Freeze with existing library fixed** — autoMatch suggestions now computed lazily one cluster at a time with a `tick()` yield between each, instead of all 40 upfront blocking the UI thread
 - **Library lookups 10-20× faster** — centroids and library samples pre-normalized at store/load time; autoMatchCluster uses dot product instead of full cosine (no sqrt per comparison)
 - **sacatFromJSON** and **addToLib** both store a normalized `scaled` copy alongside raw pixels
