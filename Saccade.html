@@ -1332,7 +1332,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.33 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.34 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -1895,9 +1895,9 @@ function matchBlob(blob,bin,W,net){
     if(prob[i]>prob[best]){second=best;best=i;}
     else if(prob[i]>prob[second]) second=i;
   }
-  // Require margin of 0.15 between top-2 — emit nothing if uncertain
+  // Require margin of 0.12 between top-2 — emit nothing if uncertain
   const margin=prob[best]-prob[second];
-  if(margin<0.08) return '';
+  if(margin<0.12) return '';
   return CHARS[best];
 }
 
@@ -2440,17 +2440,18 @@ async function warmUpWithLib(medH,onProgress){
   onProgress(0,'building training data from library…');
   const Xs=[],Ys=[];
 
-  // Library entries only — real beats synth, always
+  // Library entries only — all samples regardless of font fingerprint
   const LIB_WEIGHT=3;
   const LIB_CAP=30;
-  const fp=getCurrentFontFP(medH);
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
     if(ci<0) continue;
     let used=0;
     for(const s of samples){
       if(used>=LIB_CAP) break;
-      if(s.fontFP&&s.fontFP!==fp) continue;
+      // No fontFP gate here — use all library entries for training.
+      // fontFP filtering only happens in autoMatchCluster (suggestions).
+      // Gate was losing vowel samples labeled at slightly different medH.
       for(let w=0;w<LIB_WEIGHT;w++){Xs.push(s.pixels);Ys.push(ci);}
       used++;
     }

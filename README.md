@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v33 (current)
+### v34 (current)
+- **fontFP gate removed from training** — warmUpWithLib now uses all library samples regardless of font fingerprint; gate was silently dropping vowels labeled at slightly different medH values
+- **Margin threshold raised 0.08→0.12** — net now blanks uncertain matches rather than guessing wrong chars (fixes spurious `*` in output)
+- Unused `fp` variable removed from warmUpWithLib
+
+### v33
 - **TextDetector removed** — Saccade always uses its own pipeline; no browser API fallback, fully browser-agnostic as intended
 - **WARM UP progress span fixed** — dedicated `#warm-pct` element in HTML, no more re-creation on every callback tick
 - **`labeledSamples` parameter removed** — was passed to `warmUpWithLib` but never used; cache check now only considers medH drift and library size
