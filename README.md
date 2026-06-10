@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v35 (current)
+### v36 (current)
+- **Debug panel crash fixed** — panels wrapped in try/catch so any rendering error never kills the pipeline or blanks output
+- **Spread guard in lineToString** — explicit field copy replaces `{...d}` spread to prevent unexpected throw
+- **emit-done stage** now fires after debug panels complete, so green dot accurately reflects full completion
+
+### v35
 - **Debug drawer added** — toggle with DEBUG button in output bar; four tabs:
   - **BLOBS** — per-blob table: position, output char, source (direct/net/blank), margin, top-1, top-2
   - **CLUSTERS** — cluster index, label, blob count, sample count
