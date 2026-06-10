@@ -2061,9 +2061,9 @@ function lineToString(line,bin,W,net,medW,blobLabels){
       out+=direct;
       _dbg.blobs.push({char:direct,margin:1.0,top1:direct,top2:'-',source:'direct',x:line[i].minX,y:line[i].minY});
     } else {
-      const d=matchBlobDebug(line[i],bin,W,net);
+      const d=matchBlobDebug(line[i],bin,W,net)||{char:'',margin:0,top1:'?',top2:'?',source:'err'};
       out+=d.char;
-      _dbg.blobs.push({...d,x:line[i].minX,y:line[i].minY});
+      _dbg.blobs.push({char:d.char,margin:d.margin,top1:d.top1,top2:d.top2,source:d.source,x:line[i].minX,y:line[i].minY});
     }
   }
   return out;
@@ -2758,9 +2758,9 @@ async function jsPipelinePath(bin,W,H){
   // EMIT
   setStage('emit','active'); await tick();
   emitText(text);
-  setStage('emit','done');
 
   // ── POPULATE DEBUG PANELS ─────────────────────────────────────
+  try {
   // Panel 1: BLOBS — per-blob char/margin/source table
   (()=>{
     const p=document.getElementById('dpanel-blobs');
@@ -2843,6 +2843,8 @@ async function jsPipelinePath(bin,W,H){
       <tbody>${rows}</tbody>
     </table>`;
   })();
+  } catch(e){ console.warn('[debug panels]',e); }
+  setStage('emit','done');
 
 } // ── end jsPipelinePath ──────────────────────────────────────────
 
