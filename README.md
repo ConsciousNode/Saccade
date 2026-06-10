@@ -69,7 +69,13 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v31 (current)
+### v32 (current)
+- **Freeze with existing library fixed** — autoMatch suggestions now computed lazily one cluster at a time with a `tick()` yield between each, instead of all 40 upfront blocking the UI thread
+- **Library lookups 10-20× faster** — centroids and library samples pre-normalized at store/load time; autoMatchCluster uses dot product instead of full cosine (no sqrt per comparison)
+- **sacatFromJSON** and **addToLib** both store a normalized `scaled` copy alongside raw pixels
+- **loadLibFromLS** entries normalized lazily on first use if loaded from older format
+
+### v31
 - Gap fill threshold raised 0.30→0.50 — only shows chars where the image actually has a plausible match; no more being asked about `}` and `~` on a prose image
 - Gap fill now only iterates chars that crossed the threshold — skips the rest entirely
 - `autocapitalize="none"` on both label and gap fill inputs — mobile keyboard no longer auto-capitalises first char

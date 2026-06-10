@@ -1332,7 +1332,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.31 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.32 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2022,7 +2022,11 @@ function sacatFromJSON(json){
       for(let i=0;i<px.length;i++){dot+=px[i]*ex.pixels[i];na+=px[i]*px[i];nb+=ex.pixels[i]*ex.pixels[i];}
       if(dot/Math.sqrt(na*nb)>0.97){dup=true;break;}
     }
-    if(!dup){existing.push({pixels:px,medH:e.medH,source:e.source,timestamp:e.timestamp,fontFP:e.fontFP||null});added++;}
+    if(!dup){
+      const scaled=new Float32Array(px); normalizeVec(scaled);
+      existing.push({pixels:px,scaled,medH:e.medH,source:e.source,timestamp:e.timestamp,fontFP:e.fontFP||null,_normalized:true});
+      added++;
+    }
   }
   return added;
 }
@@ -2113,9 +2117,12 @@ function resetFontFP(){ _currentFontFP=null; }
 function addToLib(ch,pixels32,medH){
   if(!sacatLib.has(ch)) sacatLib.set(ch,[]);
   const fp=getCurrentFontFP(medH);
+  // Normalize a copy so autoMatchCluster can use cheap dot products
+  const scaled=new Float32Array(pixels32);
+  normalizeVec(scaled);
   sacatLib.get(ch).push({
-    pixels:pixels32,medH,source:'user',
-    timestamp:Date.now(),fontFP:fp
+    pixels:pixels32, scaled, medH, source:'user',
+    timestamp:Date.now(), fontFP:fp, _normalized:true
   });
   saveLibToLS(); updateLibUI();
 }
@@ -2214,22 +2221,24 @@ function renderClusterCell(pixels32,nativeW,nativeH){
   wrap.appendChild(c); return wrap;
 }
 
+// Pre-normalize a vector in place — makes cosSim a cheap dot product
+function normalizeVec(v){
+  let n=0; for(let i=0;i<v.length;i++) n+=v[i]*v[i];
+  n=Math.sqrt(n); if(n>0) for(let i=0;i<v.length;i++) v[i]/=n;
+  return v;
+}
+
 function autoMatchCluster(centroid,medH){
-  // Only auto-match library entries from the same font context
+  // centroid is assumed already normalized (done at cluster build time)
   const fp=getCurrentFontFP(medH);
   let bestChar=null,bestSim=0;
-  function cosSim(a,b){
-    let dot=0,na=0,nb=0;
-    for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
-    const d=Math.sqrt(na)*Math.sqrt(nb);
-    return d>0?dot/d:0;
-  }
   for(const[ch,samples] of sacatLib){
     for(const s of samples){
-      // Skip entries from different font contexts
       if(s.fontFP&&s.fontFP!==fp) continue;
-      const sim=cosSim(centroid,s.scaled);
-      if(sim>bestSim){bestSim=sim;bestChar=ch;}
+      // dot product only — both sides normalized
+      let dot=0;
+      for(let i=0;i<centroid.length;i++) dot+=centroid[i]*s.scaled[i];
+      if(dot>bestSim){bestSim=dot;bestChar=ch;}
     }
   }
   return bestSim>0.90?bestChar:null;
@@ -2246,10 +2255,15 @@ async function runLabelUI(clusters,medH){
   const btnDone=document.getElementById('btn-label-done');
   const labeled=new Map(); // clusterIdx → char
 
-  // Pre-compute auto-matches for all clusters — shown as suggestions, not hidden
-  const suggestions=new Map(); // clusterIdx → suggested char (may be null)
-  for(let i=0;i<clusters.length;i++){
-    suggestions.set(i, autoMatchCluster(clusters[i].centroid,medH));
+  // Normalize all cluster centroids once — makes autoMatchCluster a cheap dot product
+  for(const cl of clusters){
+    if(!cl._normalized){ normalizeVec(cl.centroid); cl._normalized=true; }
+  }
+  // Also normalize library sample pixels once at lookup time (done inside addToLib going forward)
+  for(const[,samples] of sacatLib){
+    for(const s of samples){
+      if(!s._normalized){ normalizeVec(s.scaled); s._normalized=true; }
+    }
   }
 
   if(clusters.length===0){modal.classList.remove('on');return labeled;}
@@ -2257,15 +2271,17 @@ async function runLabelUI(clusters,medH){
   modal.classList.add('on');
   btnDone.disabled=false;
   btnDone.textContent='DONE LABELING';
-  input.value=''; input.focus();
+  input.value='';
 
   return new Promise(resolve=>{
     let idx=0;
 
-    function showCluster(){
+    async function showCluster(){
       if(idx>=clusters.length){ finish(); return; }
       const cl=clusters[idx];
-      const suggested=suggestions.get(idx);
+      // Compute suggestion lazily — one cluster at a time, yields UI between calls
+      await tick();
+      const suggested=autoMatchCluster(cl.centroid,medH);
 
       // Header and hint vary by whether we have a suggestion
       if(suggested){
@@ -2290,7 +2306,7 @@ async function runLabelUI(clusters,medH){
 
     function confirm(){
       const ch=input.value.trim();
-      if(!ch||ch.length!==1){ skip(); return; } // empty confirm = skip
+      if(!ch||ch.length!==1){ skip(); return; }
       labeled.set(idx,ch);
       for(const px of clusters[idx].pixels) addToLib(ch,px.scaled,medH);
       idx++; showCluster();
