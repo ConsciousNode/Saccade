@@ -1406,7 +1406,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.37 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.38 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2256,7 +2256,7 @@ function clusterBlobs(comps,bin,W,maxClusters=20){
 
   // Simple greedy nearest-neighbor clustering
   const clusters=[]; // [{centroid:Float32Array, members:[idx], pixels:[Float32Array]}]
-  const THRESHOLD=0.78; // lower threshold — splits P/F/R and similar stroke-sharing chars
+  const THRESHOLD=0.72; // lower threshold — better splits e/o and P/F/R
 
   function cosSim(a,b){
     let dot=0,na=0,nb=0;
@@ -2391,7 +2391,7 @@ async function runLabelUI(clusters,medH){
         suggestion.style.display='none';
       }
 
-      progress.textContent=`cluster ${idx+1} of ${clusters.length}${cl.members.length>50?' ⚠ '+cl.members.length+' blobs':' · '+cl.members.length+' blobs'}`;
+      progress.textContent=`cluster ${idx+1} of ${clusters.length}${cl.members.length>50?' ⚠ '+cl.members.length+' blobs — skip if mixed chars!':' · '+cl.members.length+' blobs'}`;
       grid.innerHTML='';
       const show=cl.pixels.slice(0,6);
       for(const px of show) grid.appendChild(renderClusterCell(px.scaled,px.nativeW,px.nativeH));
@@ -2557,7 +2557,7 @@ async function warmUpWithLib(medH,onProgress){
 
   // Cap total entries per char — not per sample — so LIB_WEIGHT doesn't bypass the cap
   // This prevents t/n/h drowning out rare chars
-  const MAX_ENTRIES=20; // hard ceiling on training vectors per char
+  const MAX_ENTRIES=25; // hard ceiling on training vectors per char
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
     if(ci<0) continue;
@@ -2587,7 +2587,7 @@ async function warmUpWithLib(medH,onProgress){
   const classCounts=new Array(N_CHARS).fill(0);
   for(const y of Ys) classCounts[y]++;
   const maxCount=Math.max(1,...classCounts);
-  const classWeights=classCounts.map(c=>c>0?Math.min(maxCount/c,8):1); // cap weight at 8×
+  const classWeights=classCounts.map(c=>c>0?Math.min(maxCount/c,3):1); // cap weight at 3×
 
   const totalSteps=EPOCHS*Xs.length;
   let step=0,lrNow=LR;

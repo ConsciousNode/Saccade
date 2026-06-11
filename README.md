@@ -69,7 +69,13 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v37 (current)
+### v38 (current)
+- **Inverse frequency weight cap lowered 8×→3×** — v37's 8× cap was causing `y` (28 samples) to get boosted so hard it flooded inference; now capped at 3× for gentler balancing
+- **Cluster threshold lowered 0.78→0.72** — better splits e/o and P/F/R which were still merging
+- **Mixed cluster warning** — large clusters (>50 blobs) now say "skip if mixed chars!" so you know to skip e/o mixed clusters rather than labeling them as one char
+- **MAX_ENTRIES raised 20→25** — gives net slightly more data per char for chars with many real samples
+
+### v37
 - **Class imbalance fixed** — training now caps at 20 entries per char (not samples×weight), so `t`=71 and `o`=4 get equal representation; previously `t`/`n`/`h` were drowning everything else causing margin 0.00 on all net inferences
 - **Inverse frequency weighting** — rare chars get proportionally higher effective LR (up to 8×) during training; forces net to learn boundaries for low-sample chars
 - **Large cluster warning** — label modal shows ⚠ N blobs when a cluster has >50 members so you don't accidentally skip the most important cluster
