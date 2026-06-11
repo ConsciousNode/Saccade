@@ -1372,6 +1372,7 @@
       <button id="btn-clear">CLEAR</button>
       <button id="btn-new">NEW IMAGE</button>
       <button id="btn-debug" style="margin-left:auto;color:var(--steel);border-color:var(--steel);">DEBUG</button>
+      <button id="btn-export-debug" style="color:var(--steel);border-color:var(--steel);">EXPORT DEBUG</button>
       <span class="ccount" id="ccount">0 chars</span>
     </div>
     <!-- Debug drawer -->
@@ -1406,7 +1407,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.39 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.40 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2675,6 +2676,10 @@ async function jsPipelinePath(bin,W,H){
   const clusters=clusterBlobs(filteredComps,bin,W,40);
   setStage('cluster','done');
 
+  // ATLAS — build blob→cluster map (instant, just bookkeeping)
+  setStage('atlas','active'); await tick();
+  setStage('atlas','done');
+
   // LABEL — show ALL clusters, auto-match pre-filled, no minimum
   setStage('label','active'); await tick();
   const labeledMap=await runLabelUI(clusters,medH);
@@ -2895,6 +2900,53 @@ document.querySelectorAll('.dtab').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('dpanel-'+btn.dataset.tab).classList.add('active');
   });
+});
+
+document.getElementById('btn-export-debug').addEventListener('click',()=>{
+  const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  const lines=[];
+
+  // BLOBS
+  lines.push('=== BLOBS ===');
+  lines.push('pos\tout\tsrc\tmargin\ttop1\ttop2');
+  for(const b of _dbg.blobs){
+    lines.push(`${b.x},${b.y}\t${b.char||'·'}\t${b.source}\t${b.margin.toFixed(2)}\t${b.top1}\t${b.top2}`);
+  }
+
+  // CLUSTERS
+  lines.push('\n=== CLUSTERS ===');
+  lines.push('idx\tlabel\tblobs\tsamples');
+  const clusterPanel=document.getElementById('dpanel-clusters');
+  const rows=clusterPanel.querySelectorAll('tbody tr');
+  rows.forEach((r,i)=>{
+    const cells=[...r.querySelectorAll('td')].map(c=>c.textContent.trim());
+    lines.push(`${i}\t${cells.join('\t')}`);
+  });
+
+  // TRAINING
+  lines.push('\n=== TRAINING ===');
+  lines.push('char\tsamples');
+  const coverage={};
+  for(const[ch,samples] of sacatLib) coverage[ch]=(coverage[ch]||0)+samples.length;
+  for(const ch of Object.keys(coverage).sort()) lines.push(`${ch}\t${coverage[ch]}`);
+  const missing=CHARS.split('').filter(c=>!coverage[c]);
+  lines.push(`No samples: ${missing.join(' ')}`);
+
+  // LIBRARY
+  lines.push('\n=== LIBRARY ===');
+  lines.push(`${sacatLib.size} chars · ${libCount()} total samples`);
+  lines.push('char\tsamples\tfingerprinted');
+  const entries=[...sacatLib.entries()].sort((a,b)=>b[1].length-a[1].length);
+  for(const[ch,samples] of entries){
+    const fp=samples.filter(s=>s.fontFP).length;
+    lines.push(`${ch}\t${samples.length}\t${fp}`);
+  }
+
+  const blob=new Blob([lines.join('\n')],{type:'text/plain'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=`saccade-debug-${ts}.txt`;
+  a.click(); URL.revokeObjectURL(url);
 });
 
 document.getElementById('btn-copy').addEventListener('click',()=>{

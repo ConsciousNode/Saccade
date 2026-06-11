@@ -69,7 +69,11 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v39 (current)
+### v40 (current)
+- **ATLAS stage now lights up** — was never calling setStage('atlas',...); now fires between CLUSTER and LABEL
+- **EXPORT DEBUG button** — one click downloads a timestamped .txt with all four debug panels (BLOBS, CLUSTERS, TRAINING, LIBRARY); no more copy-pasting
+
+### v39
 - **Inverse frequency weighting removed** — per-sample LR scaling destabilized SGD, causing net to collapse to K/S output; replaced with balanced oversampling
 - **Balanced oversampling** — minority classes oversampled to match majority class size (capped at MAX_ENTRIES=25); cleaner than weighted loss for small datasets
 - **Threshold reverted 0.72→0.78** — lower threshold was causing ligature merging (fi, ft clusters) and over-fragmentation; 0.78 was correct
