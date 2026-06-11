@@ -1407,7 +1407,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.40 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.41 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2753,13 +2753,20 @@ async function jsPipelinePath(bin,W,H){
     setStage('quant','done'); // mark done even if skipped
   }
 
-  // MATCH — direct labels short-circuit net; net used for unlabeled blobs
+  // MATCH — direct labels short-circuit net for clean small clusters only.
+  // Large clusters (>30 blobs) are likely mixed chars (e/o/a/i/u) — skip
+  // direct label and let the net infer each blob individually.
   _dbg.blobs=[]; // reset debug blob log before this run
   setStage('match','active'); await tick();
+  const DIRECT_MAX=30;
   const blobLabels=new Map();
   for(const[clusterIdx,ch] of labeledMap){
     const cl=clusters[clusterIdx];
-    if(cl) for(const compIdx of cl.members) blobLabels.set(compIdx,ch);
+    if(!cl) continue;
+    if(cl.members.length<=DIRECT_MAX){
+      for(const compIdx of cl.members) blobLabels.set(compIdx,ch);
+    }
+    // Large cluster: add to library (already done in LABEL) but let net infer
   }
   const lines=groupLines(filteredComps,medH*0.55);
   const text=lines.map(l=>lineToString(l,bin,W,qnet,medW,blobLabels)).join('\n');
@@ -2812,25 +2819,25 @@ async function jsPipelinePath(bin,W,H){
     </table>`;
   })();
 
-  // Panel 3: TRAINING — samples per char used in this training run
+  // Panel 3: TRAINING — actual balanced training samples used this run
   (()=>{
     const p=document.getElementById('dpanel-training');
     const coverage={};
     for(const[ch,samples] of sacatLib){
-      coverage[ch]=(coverage[ch]||0)+samples.length;
+      coverage[ch]=Math.min(25,samples.length); // reflects MAX_ENTRIES cap
     }
     const chars=Object.keys(coverage).sort();
     if(!chars.length){p.innerHTML='<div class="debug-empty">Library empty — no training data.</div>';return;}
     const rows=chars.map(ch=>{
       const n=coverage[ch];
       const cls=n===0?'dc-zero':n<5?'dc-low':'dc-ok';
-      return `<tr><td>${ch==='<'?'&lt;':ch==='>'?'&gt;':ch==='&'?'&amp;':ch}</td><td class="${cls}">${n}</td></tr>`;
+      return `<tr><td>${ch==='<'?'&lt;':ch==='>'?'&gt;':ch==='&'?'&amp;':ch}</td><td class="${cls}">${n} (lib: ${sacatLib.get(ch)?.length||0})</td></tr>`;
     }).join('');
-    // Also show chars in CHARS with zero coverage
     const missing=CHARS.split('').filter(c=>!coverage[c]);
     const missingStr=missing.length?`<div style="margin-top:8px;color:var(--text-lo)">No samples: <span style="color:var(--red)">${missing.join(' ')}</span></div>`:'';
-    p.innerHTML=`<table class="debug-table">
-      <thead><tr><th>char</th><th>samples</th></tr></thead>
+    p.innerHTML=`<div style="margin-bottom:4px;font-size:8px;color:var(--text-lo)">showing capped training count (lib count)</div>
+    <table class="debug-table">
+      <thead><tr><th>char</th><th>train (lib)</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>${missingStr}`;
   })();

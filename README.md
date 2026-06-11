@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v40 (current)
+### v41 (current)
+- **Large cluster direct-label bypass** — clusters with >30 blobs are no longer short-circuited via blobLabels; net infers each blob individually so mixed vowel clusters (e/o/a/i/u) get properly distinguished instead of all becoming one label
+- **Training panel fixed** — now shows capped training count (what net actually saw) alongside raw library count, so 314 lib samples for e correctly shows as 25 training samples
+- **DIRECT_MAX=30** — clean threshold: small clusters (single char, clear label) use direct path; large mixed clusters go through net
+
+### v40
 - **ATLAS stage now lights up** — was never calling setStage('atlas',...); now fires between CLUSTER and LABEL
 - **EXPORT DEBUG button** — one click downloads a timestamped .txt with all four debug panels (BLOBS, CLUSTERS, TRAINING, LIBRARY); no more copy-pasting
 
