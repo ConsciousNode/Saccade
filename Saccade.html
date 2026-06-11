@@ -2553,7 +2553,6 @@ async function warmUpWithLib(medH,onProgress){
   const h=Math.max(12,Math.min(64,medH));
 
   onProgress(0,'building training data from library…');
-  const Xs=[],Ys=[];
 
   // Build balanced training set via oversampling — each char gets equal representation
   // This is cleaner than per-sample LR scaling which destabilizes SGD
