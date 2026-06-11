@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v38 (current)
+### v39 (current)
+- **Inverse frequency weighting removed** — per-sample LR scaling destabilized SGD, causing net to collapse to K/S output; replaced with balanced oversampling
+- **Balanced oversampling** — minority classes oversampled to match majority class size (capped at MAX_ENTRIES=25); cleaner than weighted loss for small datasets
+- **Threshold reverted 0.72→0.78** — lower threshold was causing ligature merging (fi, ft clusters) and over-fragmentation; 0.78 was correct
+
+### v38
 - **Inverse frequency weight cap lowered 8×→3×** — v37's 8× cap was causing `y` (28 samples) to get boosted so hard it flooded inference; now capped at 3× for gentler balancing
 - **Cluster threshold lowered 0.78→0.72** — better splits e/o and P/F/R which were still merging
 - **Mixed cluster warning** — large clusters (>50 blobs) now say "skip if mixed chars!" so you know to skip e/o mixed clusters rather than labeling them as one char

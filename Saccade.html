@@ -1406,7 +1406,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.38 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.39 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2256,7 +2256,7 @@ function clusterBlobs(comps,bin,W,maxClusters=20){
 
   // Simple greedy nearest-neighbor clustering
   const clusters=[]; // [{centroid:Float32Array, members:[idx], pixels:[Float32Array]}]
-  const THRESHOLD=0.72; // lower threshold — better splits e/o and P/F/R
+  const THRESHOLD=0.78; // balanced — splits similar chars without over-fragmenting
 
   function cosSim(a,b){
     let dot=0,na=0,nb=0;
@@ -2555,18 +2555,27 @@ async function warmUpWithLib(medH,onProgress){
   onProgress(0,'building training data from library…');
   const Xs=[],Ys=[];
 
-  // Cap total entries per char — not per sample — so LIB_WEIGHT doesn't bypass the cap
-  // This prevents t/n/h drowning out rare chars
-  const MAX_ENTRIES=25; // hard ceiling on training vectors per char
+  // Build balanced training set via oversampling — each char gets equal representation
+  // This is cleaner than per-sample LR scaling which destabilizes SGD
+  const MAX_ENTRIES=25;
+  const charSamples=new Map(); // char → [pixels arrays]
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
     if(ci<0) continue;
-    let entries=0;
-    for(const s of samples){
-      if(entries>=MAX_ENTRIES) break;
-      Xs.push(s.pixels); Ys.push(ci);
-      entries++;
+    charSamples.set(ci,samples.slice(0,MAX_ENTRIES).map(s=>s.pixels));
+  }
+
+  // Oversample minority classes to match the most-populated class (capped)
+  const maxSamples=Math.min(MAX_ENTRIES,Math.max(...[...charSamples.values()].map(s=>s.length)));
+  for(const[ci,samples] of charSamples){
+    while(samples.length<maxSamples){
+      samples.push(samples[Math.floor(Math.random()*samples.length)]);
     }
+  }
+
+  const Xs=[],Ys=[];
+  for(const[ci,samples] of charSamples){
+    for(const px of samples){ Xs.push(px); Ys.push(ci); }
   }
 
   if(Xs.length===0){
@@ -2583,12 +2592,6 @@ async function warmUpWithLib(medH,onProgress){
     [Ys[i],Ys[j]]=[Ys[j],Ys[i]];
   }
 
-  // Build inverse-frequency class weights — rare chars get proportionally higher LR
-  const classCounts=new Array(N_CHARS).fill(0);
-  for(const y of Ys) classCounts[y]++;
-  const maxCount=Math.max(1,...classCounts);
-  const classWeights=classCounts.map(c=>c>0?Math.min(maxCount/c,3):1); // cap weight at 3×
-
   const totalSteps=EPOCHS*Xs.length;
   let step=0,lrNow=LR;
   const YIELD_EVERY=200;
@@ -2596,7 +2599,7 @@ async function warmUpWithLib(medH,onProgress){
   for(let epoch=0;epoch<EPOCHS;epoch++){
     lrNow=LR*0.5*(1+Math.cos(Math.PI*epoch/EPOCHS));
     for(let i=0;i<Xs.length;i++){
-      net.trainStep(Xs[i],Ys[i],lrNow*classWeights[Ys[i]]);
+      net.trainStep(Xs[i],Ys[i],lrNow);
       step++;
       if(step%YIELD_EVERY===0){
         onProgress(step/totalSteps,`epoch ${epoch+1}/${EPOCHS}`);
