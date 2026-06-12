@@ -1407,7 +1407,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.41 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.42 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -1674,8 +1674,15 @@ class LinearLayer{
     return gIn;
   }
   step(lr){
-    for(let i=0;i<this.w.length;i++){this.w[i]-=lr*this.gw[i];this.gw[i]=0;}
-    for(let i=0;i<this.b.length;i++){this.b[i]-=lr*this.gb[i];this.gb[i]=0;}
+    const CLIP=5.0; // gradient clipping — prevents NaN from oversampled duplicates
+    for(let i=0;i<this.w.length;i++){
+      const g=Math.max(-CLIP,Math.min(CLIP,this.gw[i]));
+      this.w[i]-=lr*g; this.gw[i]=0;
+    }
+    for(let i=0;i<this.b.length;i++){
+      const g=Math.max(-CLIP,Math.min(CLIP,this.gb[i]));
+      this.b[i]-=lr*g; this.gb[i]=0;
+    }
   }
 }
 
@@ -2555,20 +2562,21 @@ async function warmUpWithLib(medH,onProgress){
 
   onProgress(0,'building training data from library…');
 
-  // Build balanced training set via oversampling — each char gets equal representation
-  // This is cleaner than per-sample LR scaling which destabilizes SGD
-  const MAX_ENTRIES=25;
-  const charSamples=new Map(); // char → [pixels arrays]
+  // Build balanced training set — oversample minority classes up to TARGET_SAMPLES
+  // Do NOT oversample to match majority class — that explodes training set size
+  const TARGET_SAMPLES=15; // target samples per char — balanced without overflow
+  const charSamples=new Map();
   for(const[ch,samples] of sacatLib){
     const ci=CHARS.indexOf(ch);
     if(ci<0) continue;
-    charSamples.set(ci,samples.slice(0,MAX_ENTRIES).map(s=>s.pixels));
+    // Take up to TARGET_SAMPLES real samples
+    const real=samples.slice(0,TARGET_SAMPLES).map(s=>s.pixels);
+    charSamples.set(ci,real);
   }
 
-  // Oversample minority classes to match the most-populated class (capped)
-  const maxSamples=Math.min(MAX_ENTRIES,Math.max(...[...charSamples.values()].map(s=>s.length)));
+  // Oversample minority classes UP TO TARGET_SAMPLES (not beyond)
   for(const[ci,samples] of charSamples){
-    while(samples.length<maxSamples){
+    while(samples.length<TARGET_SAMPLES){
       samples.push(samples[Math.floor(Math.random()*samples.length)]);
     }
   }
@@ -2609,6 +2617,13 @@ async function warmUpWithLib(medH,onProgress){
   }
 
   onProgress(1.0,'training complete');
+  // Sanity check — if weights contain NaN, training diverged
+  let hasNaN=false;
+  for(const w of net.l1.w){ if(isNaN(w)){hasNaN=true;break;} }
+  if(hasNaN){
+    console.warn('[warmUp] NaN weights detected — training diverged, returning null');
+    _trainedNet=null; return null;
+  }
   _trainedNet=net; _trainedAtH=medH; _trainedLibCount=libCount();
   return net;
 }

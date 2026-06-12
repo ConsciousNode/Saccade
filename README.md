@@ -69,7 +69,12 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v41 (current)
+### v42 (current)
+- **NaN explosion fixed** — oversampling to majority class size (250 for e) caused gradient explosion and NaN weights; now oversamples to fixed TARGET_SAMPLES=15 per char regardless of library size
+- **Gradient clipping added** — CLIP=5.0 in LinearLayer.step(); prevents any single weight update from exploding even with duplicate training vectors
+- **NaN detection** — if weights contain NaN after training, warmUpWithLib returns null gracefully instead of passing broken net to QuantizedNet
+
+### v41
 - **Large cluster direct-label bypass** — clusters with >30 blobs are no longer short-circuited via blobLabels; net infers each blob individually so mixed vowel clusters (e/o/a/i/u) get properly distinguished instead of all becoming one label
 - **Training panel fixed** — now shows capped training count (what net actually saw) alongside raw library count, so 314 lib samples for e correctly shows as 25 training samples
 - **DIRECT_MAX=30** — clean threshold: small clusters (single char, clear label) use direct path; large mixed clusters go through net
