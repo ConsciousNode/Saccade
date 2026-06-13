@@ -69,7 +69,11 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v42 (current)
+### v43 (current)
+- **Label-only mode** — if direct labels cover ≥50% of image blobs, WARM UP and QUANTIZE are skipped entirely; output comes purely from user labels; pipeline shows coverage % in WARM UP stage
+- This sidesteps the net training instability entirely while the corpus sacat solution is built; labeled clusters produce correct output immediately with no NaN risk
+
+### v42
 - **NaN explosion fixed** — oversampling to majority class size (250 for e) caused gradient explosion and NaN weights; now oversamples to fixed TARGET_SAMPLES=15 per char regardless of library size
 - **Gradient clipping added** — CLIP=5.0 in LinearLayer.step(); prevents any single weight update from exploding even with duplicate training vectors
 - **NaN detection** — if weights contain NaN after training, warmUpWithLib returns null gracefully instead of passing broken net to QuantizedNet

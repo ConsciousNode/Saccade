@@ -1407,7 +1407,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.42 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.43 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2750,22 +2750,39 @@ async function jsPipelinePath(bin,W,H){
     await runGapFillUI(uncoveredChars.filter(ch=>bestGuesses.has(ch)),bestGuesses,clusters,medH);
   }
 
-  // WARM UP — library-only training (no synth)
-  setStage('warm','active'); await tick();
-  const net=await warmUpWithLib(medH,(prog,msg)=>{
-    const pct=document.getElementById('warm-pct');
-    if(pct) pct.textContent=prog<1?`${Math.round(prog*100)}%`:'';
-  });
-  setStage('warm','done');
+  // LABEL-ONLY MODE CHECK
+  // Count how many image blobs are covered by direct labels (small clean clusters)
+  const totalBlobs=filteredComps.length;
+  const directLabeledBlobs=clusters.reduce((sum,cl,i)=>
+    labeledMap.has(i)&&cl.members.length<=30?sum+cl.members.length:sum, 0);
+  const directCoverage=totalBlobs>0?directLabeledBlobs/totalBlobs:0;
+  const LABEL_ONLY_THRESHOLD=0.50; // if >50% blobs have direct labels, skip net entirely
+  const labelOnlyMode=directCoverage>=LABEL_ONLY_THRESHOLD;
 
-  // QUANTIZE — skip if no net (library was empty, direct labels only)
+  // WARM UP — skip in label-only mode
   let qnet=null;
-  if(net){
-    setStage('quant','active'); await tick();
-    qnet=new QuantizedNet(net);
-    setStage('quant','done');
+  if(!labelOnlyMode){
+    setStage('warm','active'); await tick();
+    const net=await warmUpWithLib(medH,(prog,msg)=>{
+      const pct=document.getElementById('warm-pct');
+      if(pct) pct.textContent=prog<1?`${Math.round(prog*100)}%`:'';
+    });
+    setStage('warm','done');
+
+    // QUANTIZE — skip if no net
+    if(net){
+      setStage('quant','active'); await tick();
+      qnet=new QuantizedNet(net);
+      setStage('quant','done');
+    } else {
+      setStage('quant','done');
+    }
   } else {
-    setStage('quant','done'); // mark done even if skipped
+    // Label-only mode — mark both stages done instantly
+    const pct=document.getElementById('warm-pct');
+    if(pct) pct.textContent=`label-only (${Math.round(directCoverage*100)}% direct)`;
+    setStage('warm','done');
+    setStage('quant','done');
   }
 
   // MATCH — direct labels short-circuit net for clean small clusters only.
