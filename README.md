@@ -69,7 +69,11 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v44 (current)
+### v45 (current)
+- **DIRECT_MAX raised 30→60** — t(53)/r(41)/n(41)/h(33) were all labeled and clean but excluded from direct path; with 60 limit, 341/651 blobs (~52%) are direct labeled, well above 20% threshold
+- **Label-only threshold lowered to 20%** — extra headroom for future images with different blob distributions
+
+### v44
 - **Label-only threshold lowered 50%→30%** — cluster 0 (206 blobs) excluded by DIRECT_MAX=30 was eating ~30% of coverage alone, pushing total below 50% threshold so net kept running and diverging; 30% threshold triggers correctly with labeled small clusters alone
 
 ### v43

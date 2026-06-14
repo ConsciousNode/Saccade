@@ -1407,7 +1407,7 @@
   <span class="tagline">
     "During a saccade, <em>the eye is blind.</em> Saccade only sees what it lands on."
   </span>
-  <span class="ver">v1.0.44 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
+  <span class="ver">v1.0.45 · XINU COMPLIANT · ZERO EXTERNAL DEPENDENCIES</span>
 </footer>
 
 <script type="module">
@@ -2756,8 +2756,8 @@ async function jsPipelinePath(bin,W,H){
   const directLabeledBlobs=clusters.reduce((sum,cl,i)=>
     labeledMap.has(i)&&cl.members.length<=30?sum+cl.members.length:sum, 0);
   const directCoverage=totalBlobs>0?directLabeledBlobs/totalBlobs:0;
-  const LABEL_ONLY_THRESHOLD=0.30; // 30% direct coverage is enough — excludes giant mixed clusters
-  const labelOnlyMode=directCoverage>=LABEL_ONLY_THRESHOLD;
+  const LABEL_ONLY_THRESHOLD=0.20; // 20% direct coverage triggers label-only mode
+  const labelOnlyMode=directCoverage>=LABEL_ONLY_THRESHOLD||sacatLib.size===0;
 
   // WARM UP — skip in label-only mode
   let qnet=null;
@@ -2790,7 +2790,7 @@ async function jsPipelinePath(bin,W,H){
   // direct label and let the net infer each blob individually.
   _dbg.blobs=[]; // reset debug blob log before this run
   setStage('match','active'); await tick();
-  const DIRECT_MAX=30;
+  const DIRECT_MAX=60; // raised from 30 — t(53)/r(41)/n(41)/h(33) all labeled and clean
   const blobLabels=new Map();
   for(const[clusterIdx,ch] of labeledMap){
     const cl=clusters[clusterIdx];
