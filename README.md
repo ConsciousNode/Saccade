@@ -69,7 +69,10 @@ No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v43 (current)
+### v44 (current)
+- **Label-only threshold lowered 50%→30%** — cluster 0 (206 blobs) excluded by DIRECT_MAX=30 was eating ~30% of coverage alone, pushing total below 50% threshold so net kept running and diverging; 30% threshold triggers correctly with labeled small clusters alone
+
+### v43
 - **Label-only mode** — if direct labels cover ≥50% of image blobs, WARM UP and QUANTIZE are skipped entirely; output comes purely from user labels; pipeline shows coverage % in WARM UP stage
 - This sidesteps the net training instability entirely while the corpus sacat solution is built; labeled clusters produce correct output immediately with no NaN risk
 
