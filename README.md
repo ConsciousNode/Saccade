@@ -8,7 +8,7 @@ During a saccade, the eye is blind. Saccade only sees what it lands on.
 
 ## What it is
 
-Saccade is a single-file OCR tool that runs entirely in the browser. No server. No cloud. No API calls. Drop an image, label some character clusters, watch the neural net warm up — and get text out.
+Saccade is a single-file OCR tool that runs entirely in the browser. No server. No cloud. No API calls. Drop an image, label some character clusters, and get text out.
 
 It works on any modern browser. It works offline. It works on your phone.
 
@@ -18,204 +18,168 @@ It works on any modern browser. It works offline. It works on your phone.
 INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → LABEL → WARM UP → QUANTIZE → MATCH → EMIT
 ```
 
-**SEGMENT** finds connected ink blobs in the binarized image using a union-find flood fill, then runs a dot/tail merge pass to reconnect `i`, `j`, `!`, `?` and citation superscripts before clustering.
+**SEGMENT** finds connected ink blobs using union-find flood fill, then runs a dot/tail merge pass to reconnect `i`, `j`, `!`, `?` and citation superscripts.
 
-**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. Hull fill ratio filtering removes bracket fragments and corner noise before clustering. Up to 40 clusters per image, sorted by population.
+**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. Hull fill ratio filtering removes bracket fragments and corner noise. Up to 40 clusters per image, sorted by population.
 
-**LABEL** shows each cluster at native blob resolution — six example blobs, rendered crisp. You type the character. At least 5 clusters always shown even if the library auto-matches everything, so stale library state can't silently eat the session. Minimum label count adapts to how many clusters are actually present.
+**LABEL** shows each cluster at native blob resolution. You type the character. All 40 clusters are shown — auto-match suggestions pre-fill the input box in amber; you confirm, correct, or skip. Large clusters (>50 blobs) show a warning in case they contain mixed characters. DONE is always available with no minimum label requirement.
 
-**WARM UP** trains a two-layer neural net (`2304→64→95`) on labeled samples plus synthetic augmentation. Cross-entropy loss, cosine LR decay, 45 epochs. Progress shown live in the pipeline strip. Cached net invalidates if the library has changed size since last training.
+**WARM UP** trains a two-layer neural net (`2304→64→95`) on balanced library samples. Cross-entropy loss, cosine LR decay, 45 epochs. Gradient clipping prevents divergence. If direct labels cover ≥20% of image blobs, WARM UP is skipped entirely — label-only mode uses your labels directly with no net inference.
 
-**QUANTIZE** converts trained float32 L1 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk). Inference at 48×48 costs the same as float32 at 32×32.
+**QUANTIZE** converts trained float32 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk). Skipped in label-only mode.
 
-**MATCH** runs each blob through the quantized net. Blobs whose cluster was directly labeled during this session short-circuit inference entirely — the label is used verbatim. All other blobs go through the net; those where the margin between top-1 and top-2 probability is below 0.08 are skipped (uncertainty is honest silence, not wrong output).
+**MATCH** maps each blob to a character. Blobs from directly-labeled clusters (≤60 members) use the label verbatim — no inference, no margin check, no uncertainty. Larger unlabeled clusters go through the net. Uncertain net outputs (margin < 0.12) emit blank rather than guess wrong.
+
+**GAP FILL** (after LABEL) — chars with zero library coverage get a reference render + best-candidate blob from the image. Confirm or mark "not in image." Builds coverage organically session by session.
 
 ## The library
 
-Every session builds your `.sacat` atlas file — a JSON archive of labeled blob samples, font-fingerprinted to prevent cross-font contamination. Export it, import it anywhere. The library auto-matches previously labeled clusters so the LABEL stage gets shorter with every run. A **CLEAR LIB** button is available if the library gets contaminated or you want a fresh start.
+Every session builds your `.sacat` atlas file — labeled blob samples stored with font fingerprints. Export it, import it anywhere. The library auto-matches previously seen clusters so LABEL gets shorter every run. A **CLEAR LIB** button wipes library and localStorage and invalidates the net cache.
+
+**EXPORT DEBUG** downloads a timestamped `.txt` with all four debug panels: BLOBS (per-blob output, source, margin, top-1/top-2), CLUSTERS (index, label, blob count), TRAINING (samples per char, capped vs raw), LIBRARY (full breakdown).
 
 ```
-📚 Library: 30 chars · 579 samples
+📚 Library: 37 chars · 965 samples
 ```
 
 ## Usage
 
-1. Open `Saccade.html` in any modern browser
+1. Open `Saccade.html` in any modern browser — local file or from GitHub Pages
 2. Drop or select an image
-3. Label character clusters (at least a few — the rest auto-match from your library)
-4. Wait for WARM UP and QUANTIZE (~90 seconds on mobile)
+3. Label character clusters — amber suggestions pre-fill, confirm or correct each one
+4. If library coverage is good, WARM UP skips automatically (label-only mode)
 5. Copy the extracted text
-6. Export your `.sacat` library to keep labels for next time
+6. Export your `.sacat` to keep labels for next time
 
 ## Philosophy
 
 - **Single file.** The entire tool is `Saccade.html`. No build step. No dependencies.
 - **Xinu compliant.** Browser as bare metal. The only runtime is what ships with the browser.
 - **Offline first.** Nothing leaves your device.
-- **Browser agnostic.** Any modern engine. Tested on Android Chrome.
+- **Browser agnostic.** Any modern engine. Tested on Android Chrome and desktop Chromium.
 - **Responsive.** Works on mobile and desktop without reformatting.
+- **Honest.** Uncertain output is blank, not wrong.
 
 ## Technical lineage
 
 Built on ConsciousNode's in-house neural stack:
 
-- **TinyNet** — two-layer classifier pulled from Simulacra's LinearLayer architecture
-- **TMAC** — ternary matrix multiplication via lookup tables, derived from BitNet b1.58 and FPSS
+- **TinyNet** — two-layer classifier (2304→64→95), cross-entropy loss, cosine LR decay
+- **TMAC** — ternary matrix multiplication via lookup tables, derived from BitNet b1.58
 - **Adaptive threshold** — integral image binarization with dark-background auto-detection
 - **Union-find segmentation** — connected component labeling with dot/tail merge
 - **Greedy nearest-neighbor clustering** — cosine similarity at 48×48, hull fill filter
+- **Label-only mode** — direct label short-circuit bypasses net entirely when coverage is sufficient
 
 No external libraries. No pre-trained weights.
 
 ## Changelog
 
 ### v45 (current)
-- **DIRECT_MAX raised 30→60** — t(53)/r(41)/n(41)/h(33) were all labeled and clean but excluded from direct path; with 60 limit, 341/651 blobs (~52%) are direct labeled, well above 20% threshold
-- **Label-only threshold lowered to 20%** — extra headroom for future images with different blob distributions
+- **DIRECT_MAX raised 30→60** — `t`(53)/`r`(41)/`n`(41)/`h`(33) were labeled and clean but excluded from direct path by old limit; now 52% of blobs covered directly, reliably triggering label-only mode
+- **Label-only threshold lowered to 20%** — extra headroom for images with different blob distributions
 
 ### v44
-- **Label-only threshold lowered 50%→30%** — cluster 0 (206 blobs) excluded by DIRECT_MAX=30 was eating ~30% of coverage alone, pushing total below 50% threshold so net kept running and diverging; 30% threshold triggers correctly with labeled small clusters alone
+- **Label-only threshold lowered 50%→30%** — cluster 0 (206 blobs) excluded by DIRECT_MAX was eating ~30% of coverage, pushing below 50% threshold so net kept running
 
 ### v43
-- **Label-only mode** — if direct labels cover ≥50% of image blobs, WARM UP and QUANTIZE are skipped entirely; output comes purely from user labels; pipeline shows coverage % in WARM UP stage
-- This sidesteps the net training instability entirely while the corpus sacat solution is built; labeled clusters produce correct output immediately with no NaN risk
+- **Label-only mode** — if direct labels cover ≥threshold of image blobs, WARM UP and QUANTIZE skip entirely; output comes purely from user labels; pipeline shows coverage % in WARM UP stage
 
 ### v42
-- **NaN explosion fixed** — oversampling to majority class size (250 for e) caused gradient explosion and NaN weights; now oversamples to fixed TARGET_SAMPLES=15 per char regardless of library size
-- **Gradient clipping added** — CLIP=5.0 in LinearLayer.step(); prevents any single weight update from exploding even with duplicate training vectors
-- **NaN detection** — if weights contain NaN after training, warmUpWithLib returns null gracefully instead of passing broken net to QuantizedNet
+- **NaN explosion fixed** — oversampling to majority class size caused gradient explosion; now oversamples to fixed TARGET_SAMPLES=15 per char
+- **Gradient clipping** — CLIP=5.0 in LinearLayer.step() prevents weight updates from exploding
+- **NaN detection** — if weights contain NaN after training, warmUpWithLib returns null gracefully
 
 ### v41
-- **Large cluster direct-label bypass** — clusters with >30 blobs are no longer short-circuited via blobLabels; net infers each blob individually so mixed vowel clusters (e/o/a/i/u) get properly distinguished instead of all becoming one label
-- **Training panel fixed** — now shows capped training count (what net actually saw) alongside raw library count, so 314 lib samples for e correctly shows as 25 training samples
-- **DIRECT_MAX=30** — clean threshold: small clusters (single char, clear label) use direct path; large mixed clusters go through net
+- **Large cluster direct-label bypass** — clusters >30 blobs skip direct path; net infers each blob individually so mixed vowel clusters get properly distinguished
+- **Training panel** — now shows capped training count alongside raw library count
 
 ### v40
-- **ATLAS stage now lights up** — was never calling setStage('atlas',...); now fires between CLUSTER and LABEL
-- **EXPORT DEBUG button** — one click downloads a timestamped .txt with all four debug panels (BLOBS, CLUSTERS, TRAINING, LIBRARY); no more copy-pasting
+- **ATLAS stage now lights up** — was never calling setStage('atlas',...); fixed
+- **EXPORT DEBUG button** — one click downloads timestamped .txt with all four debug panels
 
 ### v39
-- **Inverse frequency weighting removed** — per-sample LR scaling destabilized SGD, causing net to collapse to K/S output; replaced with balanced oversampling
-- **Balanced oversampling** — minority classes oversampled to match majority class size (capped at MAX_ENTRIES=25); cleaner than weighted loss for small datasets
-- **Threshold reverted 0.72→0.78** — lower threshold was causing ligature merging (fi, ft clusters) and over-fragmentation; 0.78 was correct
+- **Inverse frequency weighting removed** — per-sample LR scaling destabilized SGD; replaced with balanced oversampling
+- **Balanced oversampling** — minority classes oversampled to match majority (capped at MAX_ENTRIES=25)
+- **Threshold reverted 0.72→0.78** — lower threshold was causing ligature merging (fi, ft)
 
 ### v38
-- **Inverse frequency weight cap lowered 8×→3×** — v37's 8× cap was causing `y` (28 samples) to get boosted so hard it flooded inference; now capped at 3× for gentler balancing
-- **Cluster threshold lowered 0.78→0.72** — better splits e/o and P/F/R which were still merging
-- **Mixed cluster warning** — large clusters (>50 blobs) now say "skip if mixed chars!" so you know to skip e/o mixed clusters rather than labeling them as one char
-- **MAX_ENTRIES raised 20→25** — gives net slightly more data per char for chars with many real samples
+- **Inverse frequency weight cap lowered 8×→3×** — v37 cap caused `y` to flood inference
+- **Cluster threshold lowered 0.78→0.72** — better splits e/o and P/F/R (later reverted)
+- **Mixed cluster warning** — large clusters show "skip if mixed chars!"
 
 ### v37
-- **Class imbalance fixed** — training now caps at 20 entries per char (not samples×weight), so `t`=71 and `o`=4 get equal representation; previously `t`/`n`/`h` were drowning everything else causing margin 0.00 on all net inferences
-- **Inverse frequency weighting** — rare chars get proportionally higher effective LR (up to 8×) during training; forces net to learn boundaries for low-sample chars
-- **Large cluster warning** — label modal shows ⚠ N blobs when a cluster has >50 members so you don't accidentally skip the most important cluster
+- **Class imbalance fixed** — training now caps at 20 entries per char; inverse frequency weighting boosts rare chars up to 8× (later revised)
+- **Large cluster warning** — label modal shows ⚠ N blobs when cluster has >50 members
 
 ### v36
-- **Debug panel crash fixed** — panels wrapped in try/catch so any rendering error never kills the pipeline or blanks output
-- **Spread guard in lineToString** — explicit field copy replaces `{...d}` spread to prevent unexpected throw
-- **emit-done stage** now fires after debug panels complete, so green dot accurately reflects full completion
+- **Debug panel crash fixed** — panels wrapped in try/catch so any rendering error never kills the pipeline
+- **Spread guard in lineToString** — explicit field copy replaces `{...d}` spread
+- **emit-done stage** fires after debug panels complete
 
 ### v35
-- **Debug drawer added** — toggle with DEBUG button in output bar; four tabs:
-  - **BLOBS** — per-blob table: position, output char, source (direct/net/blank), margin, top-1, top-2
-  - **CLUSTERS** — cluster index, label, blob count, sample count
-  - **TRAINING** — samples per char used in training; zero-coverage chars highlighted red
-  - **LIBRARY** — full library breakdown sorted by sample count, fingerprinted sample count per char
-- `matchBlobDebug` variant returns full confidence record without duplicating matchBlob logic
+- **Debug drawer** — toggle with DEBUG button; four tabs: BLOBS, CLUSTERS, TRAINING, LIBRARY
+- `matchBlobDebug` variant returns full confidence record
 - `--green` and `--red` CSS variables added to theme
 
 ### v34
-- **fontFP gate removed from training** — warmUpWithLib now uses all library samples regardless of font fingerprint; gate was silently dropping vowels labeled at slightly different medH values
-- **Margin threshold raised 0.08→0.12** — net now blanks uncertain matches rather than guessing wrong chars (fixes spurious `*` in output)
-- Unused `fp` variable removed from warmUpWithLib
+- **fontFP gate removed from training** — was silently dropping vowels labeled at slightly different medH
+- **Margin threshold raised 0.08→0.12** — net blanks uncertain matches rather than guessing wrong chars
 
 ### v33
-- **TextDetector removed** — Saccade always uses its own pipeline; no browser API fallback, fully browser-agnostic as intended
-- **WARM UP progress span fixed** — dedicated `#warm-pct` element in HTML, no more re-creation on every callback tick
-- **`labeledSamples` parameter removed** — was passed to `warmUpWithLib` but never used; cache check now only considers medH drift and library size
+- **TextDetector removed** — Saccade always uses its own pipeline; fully browser-agnostic as intended
+- **WARM UP progress span fixed** — dedicated `#warm-pct` element, no more re-creation on every tick
+- **`labeledSamples` parameter removed** from warmUpWithLib
 
 ### v32
-- **Freeze with existing library fixed** — autoMatch suggestions now computed lazily one cluster at a time with a `tick()` yield between each, instead of all 40 upfront blocking the UI thread
-- **Library lookups 10-20× faster** — centroids and library samples pre-normalized at store/load time; autoMatchCluster uses dot product instead of full cosine (no sqrt per comparison)
-- **sacatFromJSON** and **addToLib** both store a normalized `scaled` copy alongside raw pixels
-- **loadLibFromLS** entries normalized lazily on first use if loaded from older format
+- **Library freeze fixed** — autoMatch suggestions now computed lazily one cluster at a time with tick() yield; 10-20× faster lookups via normalized dot products
+- **sacatFromJSON** and **addToLib** store normalized `scaled` copy alongside raw pixels
 
 ### v31
-- Gap fill threshold raised 0.30→0.50 — only shows chars where the image actually has a plausible match; no more being asked about `}` and `~` on a prose image
-- Gap fill now only iterates chars that crossed the threshold — skips the rest entirely
-- `autocapitalize="none"` on both label and gap fill inputs — mobile keyboard no longer auto-capitalises first char
-- "USE BEST MATCH" renamed to "CONFIRM + ADD" for clarity
+- **Gap fill threshold raised 0.30→0.50** — only shows chars where image actually has a plausible match
+- **Gap fill filters to plausible matches only**
+- **`autocapitalize="none"`** on both label and gap fill inputs
 
 ### v30
-- **All clusters shown during LABEL** — no more hidden auto-matches; every cluster displayed with library suggestion pre-filled in input box; user confirms, corrects, or skips each one
-- **DONE always available** — no minimum label count, no countdown; you label what you want and move on
-- **Gap fill phase added** — after cluster labeling, any character with zero library coverage gets a reference render + best-match blob from the image; user confirms or marks "not in image"; builds library coverage organically
-- **Synth removed** — training data is 100% real labeled blobs; no more synthetic interference with chars you've already labeled; `warmUpWithLib` is library-only
-- **Net skipped cleanly when library empty** — WARM UP + QUANTIZE skip gracefully if library has no matching entries; blobLabels handles direct matches without net
-- **Cluster threshold lowered 0.85→0.78** — P/F/R and similar stroke-sharing chars now split into separate clusters
-- **Tab key skips cluster** — Tab/Escape both skip, Enter confirms
+- **All clusters shown during LABEL** — no hidden auto-matches; every cluster displayed with suggestion pre-filled
+- **DONE always available** — no minimum label count
+- **Gap fill phase** — chars with zero library coverage get reference render + best-match blob
+- **Synth removed** — training data is 100% real labeled blobs
+- **Cluster threshold lowered 0.85→0.78**
+- **Tab key skips cluster**
 
 ### v29
-- **Label modal hang fixed** — stale localStorage library no longer silently auto-matches all clusters; `MIN_CONFIRM_FLOOR=5` always promotes at least 5 clusters to manual review
-- **Pipeline freeze fixed** — `finish()` now resolves the Promise when clusters are exhausted even if minimum label count wasn't reached; `MIN_LABELS` adapts to cluster count
-- **Labeling actually affects output** — labeled clusters now short-circuit neural net inference at MATCH time; blobs whose cluster was labeled get that char directly, no margin check, no uncertainty
-- **CLEAR LIB button** — red button in lib bar; confirms before wiping; clears `sacatLib`, `localStorage`, and invalidates net cache
-- **Net cache invalidation fixed** — `_trainedLibCount` tracks library size at training time; cache busts if library changed between runs
-- **Dead loop removed** — stub `for(const[,ch] of labeledSamples)` with empty body removed from `warmUpWithLib`
-- **Responsive layout** — `100dvh` for mobile address-bar correctness; panels stack vertically on ≤600px screens; lib-bar and output-bar wrap on narrow viewports; pipeline bar scrolls silently
+- **Label modal hang fixed** — `MIN_CONFIRM_FLOOR=5` prevents stale library from eating all clusters
+- **Pipeline freeze fixed** — `finish()` resolves Promise when clusters exhausted
+- **Labeling affects output** — labeled clusters short-circuit net inference at MATCH time
+- **CLEAR LIB button**
+- **Net cache invalidation fixed** — `_trainedLibCount` tracks library size
+- **Responsive layout** — `100dvh`, vertical stack on ≤600px, flex-wrap bars
 
 ### v28
-- Fixed `.sacat` import: `fontFP` now preserved through export/import round-trip; imported entries no longer silently dropped at training time
-- Confidence margin lowered 0.15→0.08 for better recall at 48×48 input resolution
-- Epochs bumped 35→45 for better convergence
+- Fixed `.sacat` import: `fontFP` preserved through export/import round-trip
+- Confidence margin lowered 0.15→0.08
+- Epochs bumped 35→45
 
-### v27
-- Cluster previews now render at **native blob resolution** instead of upsampled 48×48 — eliminates scanline artifacts on dark-background images
-- Native blob dimensions stored with cluster pixels throughout pipeline
-
-### v26
-- **48×48 input resolution** (up from 32×32) — 2.25× more discriminative pixels
-- **TMAC ternary inference** — BitNet b1.58 absmean quantization, 3⁴=81 pattern lookup tables, 4× faster inference; new QUANTIZE stage in pipeline strip
-- `P/R/F` disambiguation improved at higher resolution
-
-### v25
-- Minimum 20 labels required before DONE LABELING unlocks (counts down live)
-- Max clusters raised 30→40
-- Hull fill ratio filter added — removes bracket/corner fragment clusters before labeling
-
-### v24
-- Library samples capped at 20 per character to prevent frequency bias in training
-- Confidence margin gate added to matchBlob — uncertain predictions emit nothing
-
-### v23
-- Cluster similarity threshold tuned to 0.85
-- Ink density filter lowered to 5% — round letters no longer filtered out
-
-### v22
-- Font fingerprinting — each library entry tagged with hash of rendered reference chars; cross-font contamination prevented
-- `.sacat` export now uses `application/octet-stream` MIME type (correct `.sacat` extension)
-
-### v21
-- Training speed 4-5min → ~90s: HIDDEN_DIM 128→64, SYNTH_PER_CHAR 40→15, EPOCHS 60→35
-- Dot/tail blob merge pass added (fixes `i`, `j`, `!`, `?`, citation numbers)
-- PROSE_PRIOR removed — library is the prior now
-
-### v20
-- `.sacat` persistent character library (localStorage + export/import)
-- CLUSTER stage: greedy nearest-neighbor grouping by cosine similarity
-- LABEL stage: interactive UI, 6 blob previews per cluster, confirm/skip flow
-- WARM UP trains on library entries (weighted ×2) + synthetic augmentation
-- Font fingerprinting via `computeFontFingerprint()`
+### v20–v27
+- v27: Cluster previews at native blob resolution
+- v26: 48×48 input resolution, TMAC ternary inference, QUANTIZE stage
+- v25: Minimum 20 labels, max clusters 40, hull fill filter
+- v24: Library cap 20 per char, confidence margin gate
+- v23: Cluster threshold 0.85, ink density filter 5%
+- v22: Font fingerprinting, `.sacat` MIME type fix
+- v21: Training 4-5min→~90s, dot/tail merge, PROSE_PRIOR removed
+- v20: `.sacat` library, CLUSTER stage, LABEL UI, WARM UP on library
 
 ### v19
-- Neural classifier replaces profile-based matcher entirely
-- TinyNet: 1024→128→95, trained on synthetic data at medH per image
-- WARM UP stage added to pipeline
+- Neural classifier replaces profile-based matcher
+- TinyNet: 1024→128→95, trained on synthetic data
+- WARM UP stage added
 
 ### v12–v18
-- Profile-based matching engine iterations (8-angle projections, hole detection, PROSE_PRIOR, atlas font tuning)
-- WAT kernel integration (standby mode)
-- Preprocessing pipeline established and confirmed working
+- Profile-based matching engine iterations
+- WAT kernel integration (standby)
+- Preprocessing pipeline established
 
 ---
 
