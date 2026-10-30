@@ -125,7 +125,7 @@
   <span class="stage">THRESH</span><span class="sep">›</span>
   <span class="stage">SEGMENT</span><span class="sep">›</span>
   <span class="stage">CLUSTER</span><span class="sep">›</span>
-  <span class="stage">LABEL</span><span class="sep">›</span>
+  <span class="stage">(LABEL)</span><span class="sep">›</span>
   <span class="stage">WARM UP</span><span class="sep">›</span>
   <span class="stage">QUANTIZE</span><span class="sep">›</span>
   <span class="stage">MATCH</span><span class="sep">›</span>
@@ -137,9 +137,9 @@
 <div class="divider"></div>
 
 <div class="desc">
-  Drop an image. Label character clusters. A tiny neural net warms up in your browser —
-  <em>no server, no cloud, no API</em>. The net quantizes to ternary weights via TMAC lookup tables
-  for 4× faster inference at 48×48 resolution. Your labeled samples persist in a
+  Drop an image and read it. A tiny neural net teaches itself from your browser's own fonts —
+  <em>no server, no cloud, no API</em> — then quantizes to ternary weights via TMAC lookup tables
+  for 4× faster inference. For unusual fonts, label character clusters: your samples persist in a
   <em>.sacat atlas file</em> that grows smarter with every session.
 </div>
 
