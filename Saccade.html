@@ -1328,6 +1328,7 @@
       <button id="btn-lib-import">IMPORT .SACAT</button>
       <button id="btn-lib-export">EXPORT .SACAT</button>
       <button id="btn-lib-clear" style="color:var(--red);border-color:var(--red);">CLEAR LIB</button>
+      <button id="btn-label-mode" title="Off: Saccade teaches itself from fonts and reads straight away. On: you label glyph clusters first (good for unusual fonts); labels grow your library.">LABEL: OFF</button>
     </div>
     <!-- Label modal (overlays right panel) -->
     <div id="label-modal">
@@ -1412,11 +1413,12 @@
 
 <script type="module">
 // ================================================================
-// SACCADE v2.0 — ConsciousNode SoftWorks
+// SACCADE v46 — ConsciousNode SoftWorks
 // Fonts: Noto Sans + Inconsolata (SIL Open Font License 1.1)
 // No network calls. No dependencies. Xinu compliant.
-// Pipeline: INGEST → CORRECT → SEGMENT → ATLAS → WARM UP → MATCH → EMIT
-// Matching: IoU morphological shape match, 90% threshold, '?' for unknowns
+// Pipeline: INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → (LABEL, optional) → WARM UP → QUANTIZE → MATCH → EMIT
+// Matching: a tiny net taught from rendered fonts (+ your .sacat library), then size/position-on-the-line rules,
+// an aspect gate, dot rules and word context choose between look-alikes. Uncertain blobs emit nothing.
 // ================================================================
 
 // ── Kernel boot (non-blocking) ────────────────────────────────────
@@ -1473,15 +1475,25 @@ async function handleFile(file){
 
 // ── Main pipeline ─────────────────────────────────────────────────
 const MAX_DIM=1400;
+function binarize(pctx,width,height){
+  const id=pctx.getImageData(0,0,width,height);
+  const gray=toGrayscale(id.data,width,height);
+  const corrected=colorCorrect(gray,width,height);
+  let gsum=0; for(let i=0;i<corrected.length;i++) gsum+=corrected[i];
+  const darkBg=(gsum/corrected.length)<110;
+  const processed=darkBg?corrected:sharpen(corrected,width,height);
+  const bs=Math.max(11,Math.round(Math.min(width,height)*0.04)|1);
+  return adaptiveThreshold(processed,width,height,bs,darkBg?14:6,darkBg);
+}
 async function runPipeline(bitmap){
   processing=true; resetStages();
   let{width,height}=bitmap;
   const scale=Math.min(1,MAX_DIM/Math.max(width,height));
   width=Math.round(width*scale); height=Math.round(height*scale);
 
-  const pc=document.createElement('canvas');
+  let pc=document.createElement('canvas');
   pc.width=width; pc.height=height;
-  const pctx=pc.getContext('2d');
+  let pctx=pc.getContext('2d');
   pctx.drawImage(bitmap,0,0,width,height);
 
   const cRaw=document.getElementById('c-raw');
@@ -1492,22 +1504,28 @@ async function runPipeline(bitmap){
 
   // INGEST
   setStage('ingest','active');
-  const id=pctx.getImageData(0,0,width,height);
-  const gray=toGrayscale(id.data,width,height);
   await tick(); setStage('ingest','done');
 
   // CORRECT + THRESHOLD
   setStage('thresh','active');
-  const corrected=colorCorrect(gray,width,height);
-  let gsum=0; for(let i=0;i<corrected.length;i++) gsum+=corrected[i];
-  const darkBg=(gsum/corrected.length)<110;
-  const processed=darkBg?corrected:sharpen(corrected,width,height);
-  const bs=Math.max(11,Math.round(Math.min(width,height)*0.04)|1);
-  const binary=adaptiveThreshold(processed,width,height,bs,darkBg?14:6,darkBg);
+  let binary=binarize(pctx,width,height);
+  // v46: small text (median blob under ~12 px) is upscaled with smoothing and binarised again — a letter only
+  // 8 px tall loses its joins and counters in a one-pixel threshold
+  { const hs=findComponents(binary,width,height).map(c=>c.maxY-c.minY+1).filter(h=>h>=3), mh=median(hs);
+    const up=hs.length>=8&&mh<12.5?Math.min(3,17/Math.max(4,mh)):1;
+    if(up>1.2&&Math.max(width,height)*up<=4200){
+      const w2=Math.round(width*up), h2=Math.round(height*up), c2=document.createElement('canvas');
+      c2.width=w2; c2.height=h2; const x2=c2.getContext('2d',{willReadFrequently:true});
+      x2.imageSmoothingEnabled=true; x2.imageSmoothingQuality='high'; x2.drawImage(bitmap,0,0,w2,h2);
+      const b2=binarize(x2,w2,h2), n2=findComponents(b2,w2,h2).filter(c=>c.maxY-c.minY+1>=3).length;
+      // keep it only if it pays: letters that blurred together at 1× come apart, so the blob count rises.
+      // (If it doesn't, the text was big enough, and smoothing only risks fusing close letters, as in serif.)
+      if(n2>=hs.length*1.03){ pc=c2; pctx=x2; width=w2; height=h2; binary=b2; }
+    } }
   renderBinaryCanvas(binary,width,height);
   await tick(); setStage('thresh','done');
 
-  modeLabel.textContent='SACCADE OCR V4';
+  modeLabel.textContent='SACCADE OCR V46';
   await jsPipelinePath(binary,width,height);
   processing=false;
 }
@@ -1524,6 +1542,9 @@ function toGrayscale(rgba,W,H){
 // bimodal (real text)→leave alone. Kills JPEG compression artifacts.
 function colorCorrect(gray,W,H){
   const PATCH=8, out=new Uint8Array(gray);
+  // v46: the background level (most common gray) — uniform patches near it snap to it, not to pure 0/255
+  const hist=new Uint32Array(256); for(let i=0;i<gray.length;i++) hist[gray[i]]++;
+  let bg=0; for(let v=1;v<256;v++) if(hist[v]>hist[bg]) bg=v;
   for(let py=0;py<H;py+=PATCH) for(let px=0;px<W;px+=PATCH){
     const ph=Math.min(PATCH,H-py), pw=Math.min(PATCH,W-px), n=ph*pw;
     let sum=0;
@@ -1539,7 +1560,9 @@ function colorCorrect(gray,W,H){
     // Do NOT touch anything that could be a text edge.
     // Old "smooth noisy patches" branch was destroying character strokes.
     if(lf<0.04&&hf<0.04){
-      const snap=mean<128?0:255;
+      // near the background → the background (on a dark page, snapping to 0 made 8-px steps that read as ink);
+      // otherwise flatten to the patch's own level
+      const snap=Math.abs(mean-bg)<40?bg:Math.round(mean);
       for(let y=py;y<py+ph;y++) for(let x=px;x<px+pw;x++) out[y*W+x]=snap;
     }
   }
@@ -1610,13 +1633,14 @@ function findComponents(bin,W,H){
       const cx=i%W, cy=(i/W)|0;
       if(cx<minX)minX=cx; if(cx>maxX)maxX=cx;
       if(cy<minY)minY=cy; if(cy>maxY)maxY=cy;
-      for(const ni of[i-1,i+1,i-W,i+W]){
+      for(const ni of[i-1,i+1,i-W,i+W,i-W-1,i-W+1,i+W-1,i+W+1]){   // v46: 8-connected (antialiased arches join corner to corner)
         if(ni<0||ni>=W*H||Math.abs(ni%W-cx)>1) continue;
         if(!visited[ni]&&bin[ni]){visited[ni]=1;stack.push(ni);}
       }
     }
     const bw=maxX-minX+1,bh=maxY-minY+1;
-    if(count>=6&&bw<W*0.8&&bh<H*0.4&&bw<bh*5&&bh<bw*4)
+    // v46: was bw<bh*5&&bh<bw*4 and count>=6, which threw away l, I, |, _ and small dots
+    if(count>=3&&bw<W*0.8&&bh<H*0.4&&bw<bh*14&&bh<bw*14)
       comps.push({minX,maxX,minY,maxY,count});
   }
   return comps;
@@ -1633,9 +1657,13 @@ const CHARS='!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`a
 const N_CHARS=CHARS.length; // 95
 const INPUT_DIM=48*48; // 2304 — 48×48 blob input      // 1024 — blob scaled to 32×32
 const HIDDEN_DIM=64;        // smaller hidden — faster on mobile
-const SYNTH_PER_CHAR=15;    // synthetic samples — library data compensates
+const SYNTH_PER_CHAR=18;    // v46: 3 font families × regular/bold × 3 degradations
 const EPOCHS=45;            // fewer epochs — higher LR compensates
-const LR=0.10;
+// v46: training is seeded, so the same image gives the same text every time
+let _seed=0x5acade;
+function srand(v){ _seed=v>>>0||1; }
+function rand(){ _seed^=_seed<<13; _seed>>>=0; _seed^=_seed>>>17; _seed^=_seed<<5; _seed>>>=0; return _seed/4294967296; }
+const LR=0.01;            // v46: 0.10 was ~10× too high for 2,304 raw pixel inputs (training collapsed to one class)
 
 // ── LinearLayer (from Simulacra) ─────────────────────────────────
 class LinearLayer{
@@ -1647,7 +1675,7 @@ class LinearLayer{
     this.gb=new Float32Array(outD);
     // Kaiming init
     const scale=Math.sqrt(2/inD);
-    for(let i=0;i<this.w.length;i++) this.w[i]=(Math.random()*2-1)*scale;
+    for(let i=0;i<this.w.length;i++) this.w[i]=(rand()*2-1)*scale;
   }
   forward(x){
     const out=new Float32Array(this.outD);
@@ -1697,10 +1725,19 @@ class TinyNet{
     for(let i=0;i<h.length;i++) if(h[i]<0) h[i]=0; // ReLU
     return{h,logits:this.l2.forward(h)};
   }
-  // Softmax cross-entropy loss + backward
+  // Softmax cross-entropy loss + backward.
+  // v46: the first layer only touches the inputs that are ink (most of a glyph is blank), and skips the input
+  // gradient nobody uses. Same SGD step as before (per-sample, same clipping), several times faster.
   trainStep(x,label,lr){
-    const{h,logits}=this.forward(x);
-    // Softmax
+    const l1=this.l1, inD=l1.inD, CLIP=5.0;
+    const nz=[]; for(let i=0;i<inD;i++) if(x[i]!==0) nz.push(i);
+    const h=new Float32Array(HIDDEN_DIM);
+    for(let o=0;o<HIDDEN_DIM;o++){
+      let s=l1.b[o]; const base=o*inD;
+      for(let k=0;k<nz.length;k++){ const i=nz[k]; s+=l1.w[base+i]*x[i]; }
+      h[o]=s>0?s:0;
+    }
+    const logits=this.l2.forward(h);
     let mx=logits[0];
     for(let i=1;i<N_CHARS;i++) if(logits[i]>mx) mx=logits[i];
     let sum=0;
@@ -1708,18 +1745,16 @@ class TinyNet{
     for(let i=0;i<N_CHARS;i++){prob[i]=Math.exp(logits[i]-mx);sum+=prob[i];}
     for(let i=0;i<N_CHARS;i++) prob[i]/=sum;
     const loss=-Math.log(Math.max(1e-9,prob[label]));
-    // Grad at output
     const dLogits=prob.slice();
     dLogits[label]-=1;
-    // Backward through l2
     const dH=this.l2.backward(dLogits,h);
-    // ReLU backward
-    const dH2=new Float32Array(HIDDEN_DIM);
-    for(let i=0;i<HIDDEN_DIM;i++) dH2[i]=h[i]>0?dH[i]:0;
-    // Backward through l1
-    this.l1.backward(dH2,x);
-    // Step both layers
-    this.l1.step(lr); this.l2.step(lr);
+    this.l2.step(lr);
+    for(let o=0;o<HIDDEN_DIM;o++){
+      const g=h[o]>0?dH[o]:0; if(g===0) continue;
+      l1.b[o]-=lr*Math.max(-CLIP,Math.min(CLIP,g));
+      const base=o*inD;
+      for(let k=0;k<nz.length;k++){ const i=nz[k], gw=g*x[i]; l1.w[base+i]-=lr*(gw>CLIP?CLIP:gw<-CLIP?-CLIP:gw); }
+    }
     return loss;
   }
   predict(x){
@@ -1844,110 +1879,113 @@ class QuantizedNet{
 // ── Scale binary blob to INPUT_DIM (32×32) ───────────────────────
 const NW=48,NH=48;
 function scaleBin(px,sw,sh){
-  const out=new Float32Array(NW*NH);
-  for(let y=0;y<NH;y++) for(let x=0;x<NW;x++){
-    const sx=Math.min(sw-1,Math.round((x/NW)*sw));
-    const sy=Math.min(sh-1,Math.round((y/NH)*sh));
-    out[y*NW+x]=px[sy*sw+sx];
+  // v46: blobs narrower than 0.35 (l, I, |, i, !) or wider than 2.8 (-, _, =) keep their real proportions,
+  // letterboxed in the middle of the 48×48 square; stretched full-width they were all the same solid block.
+  // Ordinary letters are stretched to fill the square exactly as before, so existing .sacat libraries still match.
+  const out=new Float32Array(NW*NH), ar=sw/sh;
+  let ox=0, oy=0, bw=NW, bh=NH;
+  if(ar<0.35){ bw=Math.max(2,Math.round(NW*ar/0.35)); ox=(NW-bw)>>1; }
+  else if(ar>2.8){ bh=Math.max(2,Math.round(NH*2.8/ar)); oy=(NH-bh)>>1; }
+  for(let y=0;y<bh;y++) for(let x=0;x<bw;x++){
+    const sx=Math.min(sw-1,Math.round((x/bw)*sw));
+    const sy=Math.min(sh-1,Math.round((y/bh)*sh));
+    out[(y+oy)*NW+x+ox]=px[sy*sw+sx];
   }
   return out;
 }
 
 // ── Synthetic sample generation ───────────────────────────────────
-// Render char at detected size, apply realistic degradation, return Float32Array.
+// v46: render the char in one of three families (sans, serif, mono), regular or bold, binarise with a jittered
+// threshold, sometimes grow or shrink the strokes by a pixel, then CROP TIGHT TO THE INK. Real blobs are cropped
+// tight by segmentation; v2–v45 trained on the whole render canvas (letter plus margin), so the net learned
+// pictures it never sees, and that was why self-teaching failed.
+const SYNTH_FAMILIES=['sans-serif','serif','monospace'];
 function makeSynth(ctx,ch,h,cw,ch_h,variant){
   ctx.clearRect(0,0,cw,ch_h);
   ctx.fillStyle='#fff';
-  // Vary font weight and sub-pixel position for diversity
-  const fonts=[`${h}px sans-serif`,`${h}px Arial`,`${h}px Helvetica`];
-  ctx.font=fonts[variant%fonts.length];
-  const tw=Math.max(2,Math.ceil(ctx.measureText(ch).width));
-  const ox=(variant%3-1)*0.5; // sub-pixel shift
-  ctx.fillText(ch,Math.max(0,(cw-tw)/2)+ox,ch_h*0.6);
+  const fam=SYNTH_FAMILIES[variant%3], bold=((variant/3)|0)%2, deg=((variant/6)|0)%3;
+  ctx.font=`${bold?'bold ':''}${h}px ${fam}`;
+  ctx.textBaseline='alphabetic';
+  ctx.fillText(ch,Math.round(h*0.3)+(deg-1)*0.33,Math.round(ch_h*0.72));
   const raw=ctx.getImageData(0,0,cw,ch_h).data;
-  // Threshold with jitter
-  const thresh=90+((variant*37)%60); // 90–150
-  const bin=new Uint8Array(cw*ch_h);
+  // degradations: 0 = as rendered, 1 = strokes a pixel heavier, 2 = a high threshold (thinner strokes).
+  // (Eroding by a pixel was tried and dropped: it wipes out 1-px crossbars, so a bare stem was taught as "T".)
+  const thresh=deg===2?185+((variant*29)%40):70+((variant*37)%60);
+  let bin=new Uint8Array(cw*ch_h);
   for(let i=0;i<cw*ch_h;i++) bin[i]=raw[i*4+3]>thresh?1:0;
-  // Random single-pixel dilation or erosion
-  const mode=variant%3;
-  if(mode===1){
-    const d=new Uint8Array(cw*ch_h);
-    for(let y=0;y<ch_h;y++) for(let x=0;x<cw;x++){
-      d[y*cw+x]=(bin[y*cw+x]||(x>0&&bin[y*cw+x-1])||(x<cw-1&&bin[y*cw+x+1])||
-        (y>0&&bin[(y-1)*cw+x])||(y<ch_h-1&&bin[(y+1)*cw+x]))?1:0;
-    }
-    return scaleBin(d,cw,ch_h);
-  }
-  if(mode===2){
-    const e=new Uint8Array(cw*ch_h);
-    for(let y=1;y<ch_h-1;y++) for(let x=1;x<cw-1;x++){
-      e[y*cw+x]=(bin[y*cw+x]&&bin[y*cw+x-1]&&bin[y*cw+x+1]&&
-        bin[(y-1)*cw+x]&&bin[(y+1)*cw+x])?1:0;
-    }
-    return scaleBin(e,cw,ch_h);
-  }
-  return scaleBin(bin,cw,ch_h);
+  if(deg===1) bin=dilate(bin,cw,ch_h);
+  const tc=tightCrop(bin,cw,ch_h);
+  if(!tc) return null;
+  const x=scaleBin(tc.px,tc.W,tc.H); x.ar=tc.W/tc.H;
+  return x;
 }
 
-// ── WARM UP — train the tiny net on synthetic data ────────────────
+// ── WARM UP — train the tiny net on synthetic glyphs + your library ─────
+// v46: self-teaching is back and is the default. Every char is rendered from fonts (makeSynth); labelled library
+// samples, if any, are added on top (up to 20 per char, counted twice). medH is the median blob height (about
+// the x-height), so the font size is ~1.8× that. The trained net is cached per size and library state.
+const _netCache=new Map(), NET_LS_KEY='saccade_net_v46';
+// the most recent net is also kept in localStorage (~0.8 MB), so the next visit at a similar size starts at once
+const f32ToB64=a=>{ const u=new Uint8Array(a.buffer,a.byteOffset,a.byteLength); let s=''; for(let i=0;i<u.length;i+=0x8000) s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000)); return btoa(s); };
+const b64ToF32=b=>{ const s=atob(b), u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return new Float32Array(u.buffer); };
+function saveNet(key,net){ try{ localStorage.setItem(NET_LS_KEY,JSON.stringify({key,w1:f32ToB64(net.l1.w),b1:f32ToB64(net.l1.b),w2:f32ToB64(net.l2.w),b2:f32ToB64(net.l2.b),arMin:Array.from(net.arMin),arMax:Array.from(net.arMax,v=>v===Infinity?1e9:v)})); }catch(e){ console.warn('[Saccade] net not saved',e.message); } }
+function loadNet(key){
+  try{ const j=JSON.parse(localStorage.getItem(NET_LS_KEY)||'null'); if(!j||j.key!==key) return null;
+    const net=new TinyNet(); net.l1.w.set(b64ToF32(j.w1)); net.l1.b.set(b64ToF32(j.b1)); net.l2.w.set(b64ToF32(j.w2)); net.l2.b.set(b64ToF32(j.b2));
+    net.arMin=Float32Array.from(j.arMin); net.arMax=Float32Array.from(j.arMax,v=>v>=1e9?Infinity:v); return net; }catch(e){ return null; } }
 async function warmUp(medH,onProgress){
-  // If net already trained at a similar size, reuse it
-  if(_trainedNet && Math.abs(_trainedAtH-medH)/_trainedAtH<0.20){
-    onProgress(1.0,'reusing cached network'); return _trainedNet;
-  }
-
+  const h=Math.max(12,Math.min(72,Math.round(medH*1.8)));
+  const key=`v46|${Math.round(h/4)}|${libCount()}|${[...sacatLib.keys()].sort().join('')}`;
+  if(_netCache.has(key)){ onProgress(1.0,'reusing cached network'); return _netCache.get(key); }
+  { const n=loadNet(key); if(n){ _netCache.set(key,n); _trainedNet=n; onProgress(1.0,'loaded saved network'); return n; } }
+  srand(0x5acade+h);
   const net=new TinyNet();
-  const h=Math.max(12,Math.min(64,medH));
-  const cw=Math.ceil(h*1.4), ch_h=Math.ceil(h*1.5);
+  const cw=Math.ceil(h*2), ch_h=Math.ceil(h*1.9);
   const c=document.createElement('canvas');
   c.width=cw; c.height=ch_h;
-  const ctx=c.getContext('2d');
-  ctx.textBaseline='middle';
+  const ctx=c.getContext('2d',{willReadFrequently:true});
 
-  // Build synthetic dataset
   onProgress(0,'generating training data…');
   const Xs=[],Ys=[];
+  // the range of width/height each char takes across fonts, weights and degradations (the aspect gate)
+  const arMin=new Float32Array(N_CHARS).fill(Infinity), arMax=new Float32Array(N_CHARS).fill(0);
   for(let ci=0;ci<N_CHARS;ci++){
     const ch=CHARS[ci];
     for(let v=0;v<SYNTH_PER_CHAR;v++){
       const x=makeSynth(ctx,ch,h,cw,ch_h,v);
-      // Only keep samples with actual ink
-      let ink=0; for(let i=0;i<x.length;i++) ink+=x[i];
-      if(ink>2){Xs.push(x);Ys.push(ci);}
+      if(x){Xs.push(x);Ys.push(ci); arMin[ci]=Math.min(arMin[ci],x.ar); arMax[ci]=Math.max(arMax[ci],x.ar);}
     }
+    if(sacatLib.has(ch)){ arMin[ci]=0; arMax[ci]=Infinity; }   // your own glyphs: don't second-guess their shape
+    const lib=sacatLib.get(ch);
+    if(lib) for(const s of lib.slice(0,20)){ Xs.push(s.pixels); Ys.push(ci); Xs.push(s.pixels); Ys.push(ci); }
   }
   await tick();
 
-  // Shuffle
   for(let i=Xs.length-1;i>0;i--){
-    const j=(Math.random()*(i+1))|0;
+    const j=(rand()*(i+1))|0;
     [Xs[i],Xs[j]]=[Xs[j],Xs[i]];
     [Ys[i],Ys[j]]=[Ys[j],Ys[i]];
   }
 
-  // Training loop — yield every 8 batches so UI stays alive
   const totalSteps=EPOCHS*Xs.length;
   let step=0, lrNow=LR;
-  const YIELD_EVERY=200;
-
+  const YIELD_EVERY=400;
   for(let epoch=0;epoch<EPOCHS;epoch++){
-    // Cosine LR decay
     lrNow=LR*0.5*(1+Math.cos(Math.PI*epoch/EPOCHS));
     for(let i=0;i<Xs.length;i++){
       net.trainStep(Xs[i],Ys[i],lrNow);
       step++;
       if(step%YIELD_EVERY===0){
-        const prog=step/totalSteps;
-        onProgress(prog,`epoch ${epoch+1}/${EPOCHS} · lr ${lrNow.toFixed(4)}`);
+        onProgress(step/totalSteps,`epoch ${epoch+1}/${EPOCHS} · lr ${lrNow.toFixed(4)}`);
         await tick();
       }
     }
   }
-
+  for(const w of net.l1.w) if(isNaN(w)){ console.warn('[warmUp] diverged'); return null; }
   onProgress(1.0,'training complete');
-  _trainedNet=net;
-  _trainedAtH=medH;
+  net.arMin=arMin; net.arMax=arMax;
+  _trainedNet=net; _trainedAtH=medH;
+  _netCache.set(key,net); saveNet(key,net);
   return net;
 }
 
@@ -1983,21 +2021,82 @@ function matchBlob(blob,bin,W,net){
   return CHARS[best];
 }
 
-// Debug variant — returns {char, margin, top1, top2, source:'net'}
-function matchBlobDebug(blob,bin,W,net){
-  if(!net) return {char:'',margin:0,top1:'?',top2:'?',source:'no-net'};
+// ── Size and position on the line ─────────────────────────────────
+// v46: every blob is stretched to 48×48, which erases case for look-alikes (o/O, s/S, v/V…) and turns . - _ '
+// into the same filled square. The net still judges shape; the blob's height and where it sits against the
+// line's baseline then choose between look-alikes. base = the line's baseline (median blob bottom),
+// cap = the line's cap/ascender height above it.
+const CASE_PAIRS={c:'C',o:'O',s:'S',u:'U',v:'V',w:'W',x:'X',z:'Z',p:'P',y:'Y'};
+const UPPER_OF=new Map(Object.entries(CASE_PAIRS)), LOWER_OF=new Map(Object.entries(CASE_PAIRS).map(([a,b])=>[b,a]));
+function lineGeom(line,pageCap){
+  const hs=line.map(b=>b.maxY-b.minY+1), mh=median(hs);
+  const body=line.filter(b=>b.maxY-b.minY+1>=mh*0.5);
+  const use=body.length?body:line;
+  const base=median(use.map(b=>b.maxY));
+  const tops=use.map(b=>base-b.minY).sort((a,b)=>a-b);
+  let cap=tops[Math.min(tops.length-1,Math.floor(tops.length*0.8))]||mh;
+  if(pageCap) cap=Math.max(cap,pageCap*0.9);
+  return {base,cap:Math.max(3,cap)};
+}
+const X_ONLY='acemnorsuvwxz', ASC='bdfhklt', DESC='gpqy', DIGITS='0123456789', CAPS='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function allowedByGeom(blob,g){            // small marks: only a few chars can be this small, chosen by height on the line
+  if(!g) return null;
+  const bh=blob.maxY-blob.minY+1, bw=blob.maxX-blob.minX+1, hgt=bh/g.cap, wid=bw/g.cap;
+  const c=(g.base-(blob.minY+blob.maxY)/2)/g.cap;
+  if((hgt<0.36&&wid<0.9)||(hgt<0.48&&wid<0.3&&c<0.15)){
+    if(c<-0.02) return '_,';
+    if(c<0.2) return '.,';
+    if(c<0.62) return '-~=';
+    return wid<0.22?'\'`':'"^*~\'';
+  }
+  if(hgt<0.5&&wid<0.3&&c>0.55) return '\'`';      // a short stroke high on the line
+  return null;
+}
+function excludedByGeom(blob,g){           // full-size blobs: x-height letters vs tall letters vs descenders
+  const top=(g.base-blob.minY)/g.cap, bottom=(blob.maxY-g.base)/g.cap;
+  const tall=top>0.88, desc=bottom>0.14;
+  if(!tall&&!desc) return CAPS+DIGITS+ASC.replace('t','')+DESC+'ij|[]{}()!?/\\@#$&';
+  if(!tall&&desc) return CAPS+DIGITS+ASC+X_ONLY+'ij!?#&';
+  if(tall&&!desc) return X_ONLY+DESC+'|[]{}';   // bars and brackets reach below the baseline
+  return X_ONLY+'gpqy';
+}
+function netLogits(blob,bin,W,net){
   const bw=blob.maxX-blob.minX+1,bh=blob.maxY-blob.minY+1;
-  if(bw<2||bh<2) return {char:'',margin:0,top1:'?',top2:'?',source:'tiny'};
   const bpx=new Uint8Array(bw*bh);
   for(let y=0;y<bh;y++) for(let x=0;x<bw;x++)
     bpx[y*bw+x]=bin[(blob.minY+y)*W+(blob.minX+x)];
-  const scaled=scaleBin(bpx,bw,bh);
-  const{logits}=net.forward(scaled);
-  let mx=logits[0];
-  for(let i=1;i<N_CHARS;i++) if(logits[i]>mx) mx=logits[i];
-  let sum=0;
-  const prob=new Float32Array(N_CHARS);
-  for(let i=0;i<N_CHARS;i++){prob[i]=Math.exp(logits[i]-mx);sum+=prob[i];}
+  return Float64Array.from(net.forward(scaleBin(bpx,bw,bh)).logits);
+}
+const ONE_BLOB_NEVER=':;"=%';   // these are always two or more separate pieces of ink, never one blob
+
+// Debug variant — returns {char, margin, top1, top2, source:'net'}
+function matchBlobDebug(blob,bin,W,net,geom){
+  if(!net) return {char:'',margin:0,top1:'?',top2:'?',source:'no-net'};
+  const bw=blob.maxX-blob.minX+1,bh=blob.maxY-blob.minY+1;
+  if(bw<1||bh<1) return {char:'',margin:0,top1:'?',top2:'?',source:'tiny'};
+  const lg=netLogits(blob,bin,W,net);
+  let rawMx=-Infinity,rawSum=0; for(let i=0;i<N_CHARS;i++) if(lg[i]>rawMx) rawMx=lg[i];
+  for(let i=0;i<N_CHARS;i++) rawSum+=Math.exp(lg[i]-rawMx);
+  // v46: rule out chars by size and position in logit space (in probability space a very confident wrong
+  // answer underflows everything else to zero, and the rule could never apply)
+  const ban=new Uint8Array(N_CHARS), allow=blob.dotted?'ij!?':allowedByGeom(blob,geom);
+  if(allow){ for(let i=0;i<N_CHARS;i++) if(!allow.includes(CHARS[i])) ban[i]=1; }
+  else {
+    for(const ch of '.,_-\'`"^~'+ONE_BLOB_NEVER) ban[CHARS.indexOf(ch)]=1;
+    // a dot merged into this blob makes it i, j, ! or ?; without one it is none of them
+    if(blob.dotted){ for(let i=0;i<N_CHARS;i++) if(!'ij!?'.includes(CHARS[i])) ban[i]=1; }
+    else for(const ch of 'ij!?') ban[CHARS.indexOf(ch)]=1;
+    if(geom) for(const ch of excludedByGeom(blob,geom)) ban[CHARS.indexOf(ch)]=1;
+    // aspect gate: a blob can only be a char that some font renders about this narrow or wide
+    // (if nothing that shape is left — touching letters — the gate steps aside; the other rules stay)
+    if(net.arMin){ const ar=bw/bh, g=ban.slice(); let any=0;
+      for(let i=0;i<N_CHARS;i++){ if(ar<net.arMin[i]/1.4||ar>net.arMax[i]*1.4) g[i]=1; if(!g[i]) any=1; }
+      if(any) ban.set(g); }
+  }
+  { let any=0; for(let i=0;i<N_CHARS;i++) if(!ban[i]) any=1; if(!any) ban.fill(0); }
+  let mx=-Infinity; for(let i=0;i<N_CHARS;i++) if(!ban[i]&&lg[i]>mx) mx=lg[i];
+  const prob=new Float64Array(N_CHARS); let sum=0;
+  for(let i=0;i<N_CHARS;i++) if(!ban[i]){ prob[i]=Math.exp(lg[i]-mx); sum+=prob[i]; }
   for(let i=0;i<N_CHARS;i++) prob[i]/=sum;
   let best=0,second=1;
   if(prob[1]>prob[0]){best=1;second=0;}
@@ -2005,12 +2104,27 @@ function matchBlobDebug(blob,bin,W,net){
     if(prob[i]>prob[best]){second=best;best=i;}
     else if(prob[i]>prob[second]) second=i;
   }
-  const margin=prob[best]-prob[second];
+  let ch=CHARS[best];
+  // case look-alikes (c/C, o/O, s/S…): fold the pair together, then where the blob's top sits decides
+  if(geom&&!allow&&(UPPER_OF.has(ch)||LOWER_OF.has(ch))){
+    const lo=UPPER_OF.has(ch)?ch:LOWER_OF.get(ch), up=UPPER_OF.get(lo);
+    const iLo=CHARS.indexOf(lo), iUp=CHARS.indexOf(up), p=prob[iLo]+prob[iUp];
+    const tall=(geom.base-blob.minY)/geom.cap>0.88;
+    ch=tall?up:lo;
+    prob[iLo]=prob[iUp]=0; prob[CHARS.indexOf(ch)]=p;
+    best=CHARS.indexOf(ch); second=-1;
+    for(let i=0;i<N_CHARS;i++) if(i!==best&&(second<0||prob[i]>prob[second])) second=i;
+  }
+  const margin=prob[best]-(second>=0?prob[second]:0);
+  let altL='',pL=0,altD='',pD=0;
+  for(let i=0;i<N_CHARS;i++){ const c=CHARS[i]; if(prob[i]<=0) continue;
+    if(/[A-Za-z]/.test(c)&&prob[i]>pL){pL=prob[i];altL=c;} else if(/\d/.test(c)&&prob[i]>pD){pD=prob[i];altD=c;} }
   return {
-    char: margin>=0.12?CHARS[best]:'',
+    altL, pL, altD, pD, raw:1/rawSum, ar:bw/bh,
+    char: margin>=0.12?ch:'',
     margin: Math.round(margin*100)/100,
-    top1: CHARS[best],
-    top2: CHARS[second],
+    top1: ch,
+    top2: second>=0?CHARS[second]:'-',
     source: 'net'
   };
 }
@@ -2044,36 +2158,86 @@ function tightCrop(px,W,H){
 
 // ── Line grouping + string reconstruction ─────────────────────────
 function groupLines(segs,lineGap){
+  // v46: lines are found from full-size blobs only (a line's centre is the running mean of its blobs), then
+  // small marks (. , ' - …) join the line whose span covers them. v45 anchored each line on its highest blob,
+  // so an apostrophe could split a line in two.
   if(!segs.length) return[];
-  segs.sort((a,b)=>(a.minY+a.maxY)/2-(b.minY+b.maxY)/2);
+  const medH=median(segs.map(c=>c.maxY-c.minY+1));
+  const cy=c=>(c.minY+c.maxY)/2;
+  const body=segs.filter(c=>c.maxY-c.minY+1>=medH*0.5).sort((a,b)=>cy(a)-cy(b));
+  const small=segs.filter(c=>c.maxY-c.minY+1<medH*0.5);
   const lines=[];
-  let cur=[segs[0]],curY=(segs[0].minY+segs[0].maxY)/2;
-  for(let i=1;i<segs.length;i++){
-    const cy=(segs[i].minY+segs[i].maxY)/2;
-    if(Math.abs(cy-curY)<=lineGap) cur.push(segs[i]);
-    else{lines.push(cur.sort((a,b)=>a.minX-b.minX));cur=[segs[i]];curY=cy;}
+  for(const c of body){
+    const L=lines[lines.length-1];
+    if(L&&Math.abs(cy(c)-L.cy)<=lineGap){ L.m.push(c); L.cy+=(cy(c)-L.cy)/L.m.length; L.top=Math.min(L.top,c.minY); L.bot=Math.max(L.bot,c.maxY); }
+    else lines.push({m:[c],cy:cy(c),top:c.minY,bot:c.maxY});
   }
-  lines.push(cur.sort((a,b)=>a.minX-b.minX));
-  return lines;
+  if(!lines.length) lines.push({m:[],cy:0,top:0,bot:0});
+  for(const c of small){
+    let best=lines[0],bd=Infinity;
+    for(const L of lines){ const y=cy(c), d=y<L.top?L.top-y:y>L.bot?y-L.bot:0; if(d<bd){bd=d;best=L;} }
+    best.m.push(c);
+  }
+  return lines.filter(L=>L.m.length).sort((a,b)=>a.cy-b.cy).map(L=>L.m.sort((a,b)=>a.minX-b.minX));
+}
+
+// Word gaps (v46): the page's gaps between neighbouring blobs fall into two groups, between letters and between
+// words; Otsu's split finds the boundary. Works for proportional and monospaced text alike.
+function wordGapThreshold(lines,medW){
+  const gaps=[];
+  for(const l of lines) for(let i=1;i<l.length;i++){ const g=l[i].minX-l[i-1].maxX; if(g>0) gaps.push(g); }
+  if(gaps.length<8) return medW*0.45;
+  gaps.sort((a,b)=>a-b);
+  let best=gaps[0], bestV=-1;
+  for(let k=1;k<gaps.length;k++){
+    if(gaps[k]===gaps[k-1]) continue;
+    const A=gaps.slice(0,k), B=gaps.slice(k), ma=A.reduce((s,v)=>s+v,0)/A.length, mb=B.reduce((s,v)=>s+v,0)/B.length;
+    const v=A.length*B.length*(ma-mb)*(ma-mb);
+    if(v>bestV){ bestV=v; best=(gaps[k-1]+gaps[k])/2; }
+  }
+  return Math.max(best, medW*0.25);
 }
 
 // Global debug state — populated after each run
 const _dbg={blobs:[],clusters:[],training:{},libCoverage:{}};
 
-function lineToString(line,bin,W,net,medW,blobLabels){
+function lineToString(line,bin,W,net,medW,blobLabels,pageCap,wordGap){
   let out='';
+  const geom=lineGeom(line,pageCap);
+  const cells=[];   // one per blob: what it reads as, plus its best letter and best digit alternatives
   for(let i=0;i<line.length;i++){
-    if(i>0&&(line[i].minX-line[i-1].maxX)>medW*0.45) out+=' ';
+    const sp=i>0&&(line[i].minX-line[i-1].maxX)>(wordGap||medW*0.45);
     const direct=blobLabels&&blobLabels.get(line[i]._origIdx);
     if(direct!==undefined){
-      out+=direct;
+      cells.push({sp,ch:direct,fixed:true});
       _dbg.blobs.push({char:direct,margin:1.0,top1:direct,top2:'-',source:'direct',x:line[i].minX,y:line[i].minY});
     } else {
-      const d=matchBlobDebug(line[i],bin,W,net)||{char:'',margin:0,top1:'?',top2:'?',source:'err'};
-      out+=d.char;
+      const d=matchBlobDebug(line[i],bin,W,net,geom)||{char:'',margin:0,top1:'?',top2:'?',source:'err'};
+      cells.push({sp,ch:d.char,d});
       _dbg.blobs.push({char:d.char,margin:d.margin,top1:d.top1,top2:d.top2,source:d.source,x:line[i].minX,y:line[i].minY});
     }
   }
+  // v46: words are letters or numbers. A digit inside a word of letters takes its best letter alternative,
+  // a letter inside a number its best digit alternative (if the net gave that any weight).
+  for(let i=0;i<cells.length;){
+    let j=i+1; while(j<cells.length&&!cells[j].sp) j++;
+    const w=cells.slice(i,j), L=w.filter(c=>/[A-Za-z]/.test(c.ch)).length, D=w.filter(c=>/\d/.test(c.ch)).length;
+    if(L>=2&&D>0&&D<L) for(const c of w){ if(!c.fixed&&/\d/.test(c.ch)&&c.d.altL) c.ch=c.d.altL; }
+    else if(D>=2&&L>0&&L<D) for(const c of w){ if(!c.fixed&&/[A-Za-z]/.test(c.ch)&&c.d.altD&&c.d.pD>0.01) c.ch=c.d.altD; }
+    i=j;
+  }
+  for(const c of cells) out+=(c.sp?' ':'')+c.ch;
+  // v46: letters that look like digits, inside a run of digits, are digits
+  out=out.replace(/(?<=\d)[oO](?=[\d\s.,]|$)|[oO](?=\d)/g,'0').replace(/(?<=\d)[lI|](?=\d)/g,'1');
+  // l and I are the same stroke in most sans fonts: a word in capitals has I, a lowercase word has l,
+  // and a sentence-initial word that continues in lowercase starts with I (It, In, If)
+  out=out.replace(/[A-Za-z|'’]+/g,(w,at)=>{
+    if(!/[lI|]/.test(w)) return w;
+    const rest=w.replace(/[lI|'’]/g,''), up=rest&&rest===rest.toUpperCase()&&/[A-Z]/.test(rest), low=rest&&rest===rest.toLowerCase();
+    const before=out.slice(0,at).trimEnd(), starts=!before||/[.!?:"]$/.test(before);
+    return w.split('').map((ch,k)=>{ if(!'lI|'.includes(ch)) return ch;
+      if(up) return 'I'; if(k===0&&starts&&low&&w.length<=4) return 'I'; if(low||rest==='') return ch==='|'?'l':(k===0&&starts?'I':'l');
+      return ch; }).join(''); });
   return out;
 }
 
@@ -2178,7 +2342,7 @@ document.getElementById('btn-lib-clear').addEventListener('click',()=>{
   if(!confirm(`Clear entire library? This will remove ${sacatLib.size} chars and ${n} samples from memory and localStorage.\n\nExport a .sacat first if you want to keep them.`)) return;
   sacatLib.clear();
   localStorage.removeItem(SACAT_LS_KEY);
-  _trainedNet=null; // invalidate cached net — library changed
+  _trainedNet=null; _netCache.clear(); try{ localStorage.removeItem(NET_LS_KEY); }catch(e){} // invalidate cached nets — library changed
   _trainedAtH=0;
   updateLibUI();
   alert('Library cleared.');
@@ -2638,7 +2802,8 @@ async function jsPipelinePath(bin,W,H){
   const baseComps=(()=>{
     const f=all.filter(c=>{
       const h=c.maxY-c.minY+1;
-      return h>=rm*0.2&&h<=rm*6&&c.count>=Math.max(4,rm*rm*0.04);
+      const w=c.maxX-c.minX+1;   // v46: keep periods, commas and hyphens (small but not specks)
+      return h<=rm*6&&(h>=rm*0.12||w>=rm*0.3)&&c.count>=Math.max(3,rm*rm*0.012);
     });
     return f.length>3?f:all;
   })();
@@ -2664,19 +2829,24 @@ async function jsPipelinePath(bin,W,H){
       // Horizontal overlap check
       const overlapL=Math.max(a.minX,b.minX), overlapR=Math.min(a.maxX,b.maxX);
       if(overlapR-overlapL<(a.maxX-a.minX+1)*0.3) continue;
-      // Vertical proximity check
+      // v46: and roughly centred on it (a broken-off tail beside a letter is not a dot)
+      if(Math.abs((a.minX+a.maxX)/2-(b.minX+b.maxX)/2)>(b.maxX-b.minX+1)*0.35+1) continue;
+      // Vertical proximity check — v46: a dot sits close to its body (i, j, !, ?); at 1.5× the median height a
+      // full stop could jump to the line below
       const gap=Math.max(0,Math.max(a.minY,b.minY)-Math.min(a.maxY,b.maxY)-1);
-      if(gap>roughMedH*1.5) continue;
+      if(gap>roughMedH*0.6) continue;
       // Merge a into b
       comps[j]={
         minX:Math.min(a.minX,b.minX), maxX:Math.max(a.maxX,b.maxX),
         minY:Math.min(a.minY,b.minY), maxY:Math.max(a.maxY,b.maxY),
-        count:(b.count||0)+(a.count||0)
+        count:(b.count||0)+(a.count||0), dotted:true
       };
       merged.add(i); break;
     }
   }
-  const filteredComps=comps.filter((_,i)=>!merged.has(i));
+  // tiny marks were let in (≥0.12 of the median height) so i/j dots could merge; the ones that didn't merge
+  // must meet the usual size (≥0.2 of the height, or ≥0.3 of it wide) or they're fragments and specks
+  const filteredComps=comps.filter((c,i)=>!merged.has(i)&&(c.dotted||c.maxY-c.minY+1>=rm*0.2||c.maxX-c.minX+1>=rm*0.3));
   // Tag each comp with its original index so MATCH can look up cluster labels
   filteredComps.forEach((c,i)=>{ c._origIdx=i; });
   setStage('seg','done');
@@ -2695,9 +2865,11 @@ async function jsPipelinePath(bin,W,H){
   setStage('atlas','active'); await tick();
   setStage('atlas','done');
 
-  // LABEL — show ALL clusters, auto-match pre-filled, no minimum
+  // LABEL — optional since v46 (LABEL: ON). Off: nothing to do, the net teaches itself from fonts.
+  let labeledMap=new Map();
+  if(labelMode){
   setStage('label','active'); await tick();
-  const labeledMap=await runLabelUI(clusters,medH);
+  labeledMap=await runLabelUI(clusters,medH);
   setStage('label','done');
 
   // GAP FILL — find chars with zero library coverage, show reference + best guess
@@ -2707,7 +2879,6 @@ async function jsPipelinePath(bin,W,H){
   const uncoveredChars=CHARS.split('').filter(ch=>!coveredChars.has(ch));
 
   if(uncoveredChars.length>0 && clusters.length>0){
-    // Build best-guess: for each uncovered char, find best cluster by cosine to ref render
     const h=Math.max(12,Math.min(64,medH));
     const cw=Math.ceil(h*1.6), ch_h=Math.ceil(h*1.8);
     const rc=document.createElement('canvas');
@@ -2723,7 +2894,6 @@ async function jsPipelinePath(bin,W,H){
     }
 
     for(const ch of uncoveredChars){
-      // Render reference glyph and scale to 48×48
       rctx.clearRect(0,0,cw,ch_h);
       rctx.fillStyle='#fff';
       rctx.font=`${h}px sans-serif`;
@@ -2732,9 +2902,9 @@ async function jsPipelinePath(bin,W,H){
       const raw=rctx.getImageData(0,0,cw,ch_h).data;
       const bin2=new Uint8Array(cw*ch_h);
       for(let i=0;i<cw*ch_h;i++) bin2[i]=raw[i*4+3]>90?1:0;
-      const refVec=scaleBin(bin2,cw,ch_h);
+      const tc=tightCrop(bin2,cw,ch_h); if(!tc) continue;
+      const refVec=scaleBin(tc.px,tc.W,tc.H);   // v46: cropped like a real blob
 
-      // Find cluster whose centroid best matches this reference
       let bestSim=0, bestPx=null;
       for(const cl of clusters){
         const sim=cosSim(cl.centroid,refVec);
@@ -2744,46 +2914,26 @@ async function jsPipelinePath(bin,W,H){
           bestPx={pixels:px.scaled,nativeW:px.nativeW,nativeH:px.nativeH};
         }
       }
-      if(bestSim>0.50) bestGuesses.set(ch,bestPx); // only show plausible matches
+      if(bestSim>0.50) bestGuesses.set(ch,bestPx);
     }
 
     await runGapFillUI(uncoveredChars.filter(ch=>bestGuesses.has(ch)),bestGuesses,clusters,medH);
   }
-
-  // LABEL-ONLY MODE CHECK
-  // Count how many image blobs are covered by direct labels (small clean clusters)
-  const totalBlobs=filteredComps.length;
-  const directLabeledBlobs=clusters.reduce((sum,cl,i)=>
-    labeledMap.has(i)&&cl.members.length<=30?sum+cl.members.length:sum, 0);
-  const directCoverage=totalBlobs>0?directLabeledBlobs/totalBlobs:0;
-  const LABEL_ONLY_THRESHOLD=0.20; // 20% direct coverage triggers label-only mode
-  const labelOnlyMode=directCoverage>=LABEL_ONLY_THRESHOLD||sacatLib.size===0;
-
-  // WARM UP — skip in label-only mode
-  let qnet=null;
-  if(!labelOnlyMode){
-    setStage('warm','active'); await tick();
-    const net=await warmUpWithLib(medH,(prog,msg)=>{
-      const pct=document.getElementById('warm-pct');
-      if(pct) pct.textContent=prog<1?`${Math.round(prog*100)}%`:'';
-    });
-    setStage('warm','done');
-
-    // QUANTIZE — skip if no net
-    if(net){
-      setStage('quant','active'); await tick();
-      qnet=new QuantizedNet(net);
-      setStage('quant','done');
-    } else {
-      setStage('quant','done');
-    }
-  } else {
-    // Label-only mode — mark both stages done instantly
-    const pct=document.getElementById('warm-pct');
-    if(pct) pct.textContent=`label-only (${Math.round(directCoverage*100)}% direct)`;
-    setStage('warm','done');
-    setStage('quant','done');
   }
+
+  // WARM UP — always (v46): the net learns every char from fonts, plus your library. Cached per size.
+  let qnet=null;
+  setStage('warm','active'); await tick();
+  const net=await warmUp(medH,(prog,msg)=>{
+    const pct=document.getElementById('warm-pct');
+    if(pct) pct.textContent=prog<1?`${Math.round(prog*100)}%`:'';
+  });
+  setStage('warm','done');
+  if(net){
+    setStage('quant','active'); await tick();
+    qnet=new QuantizedNet(net); qnet.arMin=net.arMin; qnet.arMax=net.arMax;
+    setStage('quant','done');
+  } else setStage('quant','done');
 
   // MATCH — direct labels short-circuit net for clean small clusters only.
   // Large clusters (>30 blobs) are likely mixed chars (e/o/a/i/u) — skip
@@ -2801,12 +2951,16 @@ async function jsPipelinePath(bin,W,H){
     // Large cluster: add to library (already done in LABEL) but let net infer
   }
   const lines=groupLines(filteredComps,medH*0.55);
-  const text=lines.map(l=>lineToString(l,bin,W,qnet,medW,blobLabels)).join('\n');
+  const caps=lines.filter(l=>l.length>=5).map(l=>lineGeom(l).cap);
+  const pageCap=caps.length?median(caps):0;
+  const wordGap=wordGapThreshold(lines,medW);
+  const text=lines.map(l=>lineToString(l,bin,W,qnet,medW,blobLabels,pageCap,wordGap)).join('\n');
   setStage('match','done');
 
   // EMIT
   setStage('emit','active'); await tick();
   emitText(text);
+  window.__saccade={dbg:_dbg,lines:lines.map(l=>{const g=lineGeom(l,pageCap);return{base:g.base,cap:g.cap,blobs:l.map(b=>({x:b.minX,y0:b.minY,y1:b.maxY,w:b.maxX-b.minX+1,dot:!!b.dotted}))};})};   // for tests/saccade-read.py
 
   // ── POPULATE DEBUG PANELS ─────────────────────────────────────
   try {
@@ -2896,6 +3050,14 @@ async function jsPipelinePath(bin,W,H){
   setStage('emit','done');
 
 } // ── end jsPipelinePath ──────────────────────────────────────────
+
+// ── Label mode (v46) ──────────────────────────────────────────────
+let labelMode=false;
+try{ labelMode=localStorage.getItem('saccade_label_mode')==='on'; }catch(e){}
+const btnLabelMode=document.getElementById('btn-label-mode');
+function showLabelMode(){ btnLabelMode.textContent=labelMode?'LABEL: ON':'LABEL: OFF'; btnLabelMode.style.color=labelMode?'var(--amber)':''; }
+btnLabelMode.addEventListener('click',()=>{ labelMode=!labelMode; try{ localStorage.setItem('saccade_label_mode',labelMode?'on':'off'); }catch(e){} showLabelMode(); });
+showLabelMode();
 
 // ── Output ────────────────────────────────────────────────────────
 const outputEl=document.getElementById('output');

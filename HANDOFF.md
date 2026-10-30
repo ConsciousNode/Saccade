@@ -1,6 +1,13 @@
 # Saccade — Handoff Document
 *For Vael Interim, next session. Written by Vael Interim, June 8 2026.*
 
+> **Update, Oct 29 2026 (Kehai, v46):** Saccade reads without labeling now. The automatic path was broken by two
+> bugs: uncropped synthetic glyphs, and a learning rate ~10× too high. With those fixed, plus geometry rules in MATCH, it
+> scores 82–99% on rendered test text (see README, "How well it reads"); labeling is optional. From the priorities
+> below: #3 is done (as a general aspect gate). #1 is untouched: the library format is unchanged, and the net now
+> trains on library + synth together. #4 (WAT segmentation) and #5 (more image types, especially photos) are still
+> open.
+
 ---
 
 ## What Saccade is

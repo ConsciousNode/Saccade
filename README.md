@@ -8,29 +8,59 @@ During a saccade, the eye is blind. Saccade only sees what it lands on.
 
 ## What it is
 
-Saccade is a single-file OCR tool that runs entirely in the browser. No server. No cloud. No API calls. Drop an image, label some character clusters, and get text out.
+Saccade is a single-file OCR tool that runs entirely in the browser. No server. No cloud. No API calls. Drop an image and get text out: Saccade teaches itself to read from the fonts your browser already has. For unusual fonts you can label glyph clusters too, and your labels build a library that carries over between sessions.
 
 It works on any modern browser. It works offline. It works on your phone.
 
 ## How it works
 
 ```
-INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → LABEL → WARM UP → QUANTIZE → MATCH → EMIT
+INGEST → THRESH → SEGMENT → ATLAS → CLUSTER → (LABEL) → WARM UP → QUANTIZE → MATCH → EMIT
 ```
 
-**SEGMENT** finds connected ink blobs using union-find flood fill, then runs a dot/tail merge pass to reconnect `i`, `j`, `!`, `?` and citation superscripts.
+**THRESH** binarises with an adaptive threshold (integral image), auto-detecting dark backgrounds. Small text (median blob under ~12 px) is upscaled with smoothing and binarised again, but only if that separates more letters.
 
-**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations. Hull fill ratio filtering removes bracket fragments and corner noise. Up to 40 clusters per image, sorted by population.
+**SEGMENT** finds 8-connected ink blobs, then runs a dot merge pass to reconnect `i`, `j`, `!` and `?` (a dot must sit close to, and centred on, its body).
 
-**LABEL** shows each cluster at native blob resolution. You type the character. All 40 clusters are shown — auto-match suggestions pre-fill the input box in amber; you confirm, correct, or skip. Large clusters (>50 blobs) show a warning in case they contain mixed characters. DONE is always available with no minimum label requirement.
+**CLUSTER** groups visually similar blobs by cosine distance on 48×48 pixel representations, for the optional labeling step.
 
-**WARM UP** trains a two-layer neural net (`2304→64→95`) on balanced library samples. Cross-entropy loss, cosine LR decay, 45 epochs. Gradient clipping prevents divergence. If direct labels cover ≥20% of image blobs, WARM UP is skipped entirely — label-only mode uses your labels directly with no net inference.
+**LABEL** (optional, the **LABEL** button) shows each cluster at native resolution so you can type the character. Auto-match suggestions pre-fill from your library, and a GAP FILL step offers characters the library doesn't cover yet. Off by default: you don't need it for ordinary fonts.
 
-**QUANTIZE** converts trained float32 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk). Skipped in label-only mode.
+**WARM UP** trains a two-layer net (`2304→64→95`) on every printable character rendered in three font families (sans, serif, mono), regular and bold, with stroke-weight and threshold variations, cropped tight to the ink exactly like real blobs. Your library samples, if any, are added on top. About 20–30 s the first time; the net is cached per text size, in the session and in the browser, so the next visit starts at once.
 
-**MATCH** maps each blob to a character. Blobs from directly-labeled clusters (≤60 members) use the label verbatim — no inference, no margin check, no uncertainty. Larger unlabeled clusters go through the net. Uncertain net outputs (margin < 0.12) emit blank rather than guess wrong.
+**QUANTIZE** converts the trained float32 weights to ternary `{-1,0,+1}` via BitNet b1.58 absmean thresholding, then precomputes TMAC lookup tables (3⁴=81 patterns per 4-weight chunk).
 
-**GAP FILL** (after LABEL) — chars with zero library coverage get a reference render + best-candidate blob from the image. Confirm or mark "not in image." Builds coverage organically session by session.
+**MATCH** reads each blob with the net, then lets the blob's geometry rule out what it can't be:
+- **Size and position on the line.** x-height letters, tall letters and capitals, and descenders (`g p q y`) are told apart by where the blob sits against the line's baseline and cap height. That is how `o/O`, `s/S` and `v/V` get their case back (every blob is stretched to the same square, which erases it). Small marks are read by height alone: `. ,` on the baseline, `-` in the middle, `' "` at the top, `_` below.
+- **Aspect gate.** A blob can only be a character that some font renders about that narrow or wide. This splits `P/R/F`, and keeps a thin `l` from being read as `T`.
+- **Dots.** A blob with a merged dot is `i j ! ?`; one without never is. `: ; " = %` are never one blob.
+- **Words.** A digit inside a word of letters becomes the net's best letter, and the other way round. `l` and `I` are chosen by the word's case.
+
+Blobs from labeled clusters use your label directly. Uncertain blobs emit nothing rather than guess.
+
+**EMIT** assembles lines from full-size blobs (small marks join the line that covers them) and finds word gaps by splitting the page's gap sizes into two groups. That works for proportional and monospaced text alike.
+
+## How well it reads
+
+`python3 tests/saccade-read.py` renders four lines of text (pangrams, digits, punctuation) in each case below, drops each image into the page and scores the output with no labeling at all:
+
+| Text | Characters correct |
+|---|---|
+| sans-serif 32 px | 98.7% |
+| sans-serif 24 px | 96.7% |
+| monospace 24 px | 96.0% |
+| serif 24 px | 95.3% |
+| sans-serif 24 px, light on dark | 93.3% |
+| sans-serif 16 px | 92.7% |
+| sans-serif 12 px | 88.0% |
+| serif 16 px | 82.0% |
+
+v45 scored 0% on all of these without labeling, since it could only read characters you had labeled.
+
+**Known limits.**
+- Letters that touch become one blob, and come out wrong or blank. This hits ligatures like `ffl` (in every test) and small serif text the most. A cut-at-the-thinnest-column splitter was tried, and hurt more than it helped.
+- Fonts unlike sans, serif and mono (script, decorative, handwriting) need labeling.
+- These are clean renders: photos of paper and heavy JPEG haven't been measured yet.
 
 ## The library
 
@@ -46,10 +76,9 @@ Every session builds your `.sacat` atlas file — labeled blob samples stored wi
 
 1. Open `Saccade.html` in any modern browser — local file or from GitHub Pages
 2. Drop or select an image
-3. Label character clusters — amber suggestions pre-fill, confirm or correct each one
-4. If library coverage is good, WARM UP skips automatically (label-only mode)
-5. Copy the extracted text
-6. Export your `.sacat` to keep labels for next time
+3. Wait for WARM UP the first time (about 20–30 s; after that the net is saved and reused)
+4. Copy the extracted text
+5. For an unusual font, turn **LABEL** on and label the clusters (amber suggestions pre-fill); export your `.sacat` to keep the labels
 
 ## Philosophy
 
@@ -69,13 +98,32 @@ Built on ConsciousNode's in-house neural stack:
 - **Adaptive threshold** — integral image binarization with dark-background auto-detection
 - **Union-find segmentation** — connected component labeling with dot/tail merge
 - **Greedy nearest-neighbor clustering** — cosine similarity at 48×48, hull fill filter
-- **Label-only mode** — direct label short-circuit bypasses net entirely when coverage is sufficient
+- **Self-taught from fonts** — synthetic glyphs in three families, cropped like real blobs, plus geometry rules at match time
 
 No external libraries. No pre-trained weights.
 
 ## Changelog
 
-### v45 (current)
+### v46 — 2026-10-29 · Kham + Kehai Interim
+- **Self-teaching works, and is the default.** Two bugs had sunk it since v2:
+  - Synthetic training glyphs were the whole render canvas while real blobs are cropped tight, so the net learned pictures it never saw.
+  - The learning rate was ~10× too high for 2,304 inputs, and training collapsed to a single class.
+
+  Both are fixed, with three font families and a no-labels-needed WARM UP. Labeling is now optional (LABEL button).
+- **Geometry rules in MATCH:** case from position on the line, small-mark rules, an aspect gate (the P/R/F split from the handoff, generalised), dot rules, and word context for letters vs digits and l/I.
+- **Segmentation:**
+  - 8-connected blobs; thin glyphs (`l I |`), dashes, underscores and i-dots are no longer filtered out.
+  - The dot merge no longer jumps a full stop onto the next line.
+  - Line grouping is no longer split by apostrophes and commas.
+  - Word gaps work for monospace.
+- **Thresholding:** colour correction snaps flat patches to the background level, not pure black or white (the 8-px speck grid on dark images). Small text is upscaled when that helps.
+- **Speed:** sparse first-layer training (same SGD, several times faster). Training is seeded (same image → same text). The net is saved in localStorage.
+- Label-only mode (skipping WARM UP when labels covered ≥20% of blobs) is gone: the net now always runs for unlabeled blobs, which used to come out blank. It's cached, so this costs nothing after the first run.
+- `tests/saccade-read.py` reads rendered test images through the real page and scores them.
+- The WASM kernel is unchanged: it still boots but isn't used by the OCR (moving segmentation into it is still on the handoff list).
+
+
+### v45
 - **DIRECT_MAX raised 30→60** — `t`(53)/`r`(41)/`n`(41)/`h`(33) were labeled and clean but excluded from direct path by old limit; now 52% of blobs covered directly, reliably triggering label-only mode
 - **Label-only threshold lowered to 20%** — extra headroom for images with different blob distributions
 
